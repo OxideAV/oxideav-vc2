@@ -1,0 +1,96 @@
+//! # oxideav-vc2
+//!
+//! Pure-Rust decoder for **SMPTE ST 2042-1:2022 VC-2** ("Dirac Pro") — an
+//! open, royalty-free, intra-frame wavelet video compression system. Each
+//! picture is wavelet-transformed (LeGall 5/3, Deslauriers-Dubuc, Haar,
+//! Fidelity, Daubechies), the subbands are quantised and entropy-coded, and
+//! every picture decodes independently (no temporal prediction).
+//!
+//! This is a clean-room implementation built solely against the normative
+//! SMPTE PDF mirrored under `docs/video/vc2/`. Clause numbers in the source
+//! track that 2022 edition.
+//!
+//! ## What is implemented
+//!
+//! * **Data coding** (Annex A) — bit/byte input, byte alignment, the fixed
+//!   literals (`read_bool` / `read_nbits` / `read_uint_lit`), the unsigned
+//!   and signed interleaved exp-Golomb codes, and the bounded-block reads
+//!   used inside slices. See [`bitio`].
+//! * **Stream structure** (§10) — parse-info headers ("BBCD"), the Table 4 /
+//!   Table 5 parse-code classification, and the `parse_sequence` walk over
+//!   data units, skipping auxiliary / padding / unknown units. See
+//!   [`sequence`].
+//! * **Sequence header** (§11) — parse parameters, the Annex B base-format
+//!   defaults (decode-critical fields), source-parameter overrides, preset
+//!   signal ranges (Table 10) and `set_coding_parameters` (§11.6). See
+//!   [`params`].
+//! * **Transform parameters** (§12.4) — wavelet filter / depth, the §12.4.4
+//!   extended (asymmetric) parameters, slice parameters and the §12.4.5.3
+//!   quantization-matrix read, with the symmetric Annex D defaults built in.
+//!   See [`transform`].
+//! * **Transform data** (§13) — subband dimensions (§13.2.3), inverse
+//!   quantization (§13.3), DC-band prediction (§13.4), and slice unpacking
+//!   for both low-delay (§13.5.3) and high-quality (§13.5.4) pictures. See
+//!   [`transform`].
+//! * **Picture decode** (§15) — the integer lifting IDWT (§15.4), pad
+//!   removal (§15.4.5), clipping (§15.5) and unsigned offsetting. See
+//!   [`wavelet`] and [`picture`].
+//!
+//! ## Not yet implemented
+//!
+//! * Picture **fragments** (§14) reassembly.
+//! * The **asymmetric** (`dwt_depth_ho > 0`) Annex D *default* matrices — a
+//!   custom quantization matrix is required in that case (and is parsed).
+//! * `oxideav-core` `Decoder` factory wiring (the `registry` feature
+//!   currently registers an empty entry-point, mirroring the VP6 scaffold).
+//!
+//! ## Quick start (standalone)
+//!
+//! ```no_run
+//! let stream: &[u8] = &[/* a VC-2 sequence */];
+//! let pictures = oxideav_vc2::decode_sequence(stream).unwrap();
+//! for pic in &pictures {
+//!     println!("picture {} is {}x{}", pic.picture_number, pic.luma_width, pic.luma_height);
+//! }
+//! ```
+
+pub mod bitio;
+pub mod error;
+pub mod params;
+pub mod picture;
+pub mod quant;
+pub mod sequence;
+pub mod transform;
+pub mod wavelet;
+
+pub use error::{Error, Result};
+pub use picture::DecodedPicture;
+pub use sequence::{classify, DataUnit, ParseInfo, PARSE_INFO_PREFIX};
+pub use transform::PictureKind;
+
+/// Decode a complete VC-2 sequence into its constituent pictures.
+///
+/// The input is a raw VC-2 byte stream that begins with a parse-info header
+/// ("BBCD") and ends with an end-of-sequence data unit (§10.4.1). Each
+/// returned [`DecodedPicture`] carries clipped, unsigned component planes.
+pub fn decode_sequence(data: &[u8]) -> Result<Vec<DecodedPicture>> {
+    sequence::parse_sequence(data)
+}
+
+#[cfg(feature = "registry")]
+mod registry {
+    use oxideav_core::RuntimeContext;
+
+    /// Codec registration entry point.
+    ///
+    /// The standalone decoder ([`crate::decode_sequence`]) is complete, but
+    /// the `oxideav-core` [`oxideav_core::Decoder`] factory — which requires
+    /// mapping a VC-2 `CodecId`, threading `CodecParameters`, and packing
+    /// the planes into a [`oxideav_core::VideoFrame`] — is intentionally
+    /// deferred to a follow-up round, mirroring the VP6 scaffold. Until then
+    /// the entry point registers nothing.
+    pub fn register(_ctx: &mut RuntimeContext) {}
+}
+
+#[cfg(feature = "registry")]
+oxideav_core::register!("vc2", registry::register);

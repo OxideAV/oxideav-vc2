@@ -1,0 +1,21 @@
+[package]
+name = "oxideav-vc2"
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT"
+repository = "https://github.com/OxideAV/oxideav-vc2"
+authors = ["Mark Karpeles"]
+description = "Pure-Rust SMPTE ST 2042-1 VC-2 (Dirac Pro) intra-frame wavelet video decoder for oxideav."
+
+readme = "README.md"
+homepage = "https://github.com/OxideAV/oxideav-vc2"
+keywords = ["multimedia", "video", "vc2", "dirac", "codec"]
+categories = ["multimedia::encoding", "multimedia::video"]
+
+[dependencies]
+oxideav-core = { version = "0.1", optional = true }
+
+[features]
+default = ["registry"]
+registry = ["dep:oxideav-core"]
