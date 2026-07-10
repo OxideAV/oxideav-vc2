@@ -7,6 +7,21 @@ on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Complete Annex D default quantization matrices.** The default-matrix
+  lookup now covers every combination the annex defines: the asymmetric
+  (`dwt_depth_ho > 0`) blocks of Tables D.1–D.7 for all seven symmetric
+  filter pairs, and Table D.8 for the one mixed pair (Haar-no-shift 2-D
+  with LeGall horizontal-only). New `quant::default_quant_matrix_full`
+  entry point keyed on the full `(wavelet_index, wavelet_index_ho,
+  dwt_depth, dwt_depth_ho)` parameter set; `MatrixLevel::H` variant for
+  the horizontal-only band values (also used when parsing custom
+  matrices). Combinations outside the tables — depths above 4, total
+  depth above 5, other mixed pairs — normatively require a custom matrix
+  (§12.4.5.3) and now fail with `MissingQuantMatrix` instead of every
+  asymmetric stream doing so. End-to-end test decodes an asymmetric
+  major-version-3 HQ stream through the extended transform parameters
+  and the Table D.8 defaults.
+
 - Initial clean-room bootstrap of the **SMPTE ST 2042-1:2022 VC-2** intra
   decoder, built solely against the normative PDF under `docs/video/vc2/`.
   The complete intra-picture decode path is implemented and validated

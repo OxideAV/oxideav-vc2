@@ -84,11 +84,13 @@ fn parse_info(out: &mut Vec<u8>, parse_code: u8, next_offset: u32, prev_offset: 
 
 /// Build a sequence-header data-unit body (§11.1) for the custom base format
 /// with explicit small frame size, 4:4:4, progressive, 8-bit full-range
-/// signal, major version 2 (HQ pictures). Returns the body bytes.
-fn sequence_header_body(width: u64, height: u64) -> Vec<u8> {
+/// signal. Major version 2 suffices for HQ pictures; version 3 unlocks the
+/// §12.4.4 extended (asymmetric) transform parameters. Returns the body
+/// bytes.
+fn sequence_header_body(width: u64, height: u64, major_version: u64) -> Vec<u8> {
     let mut w = BitWriter::default();
-    // parse_parameters: major=2 (HQ), minor=0, profile=0, level=0.
-    w.put_uint(2);
+    // parse_parameters: major, minor=0, profile=0, level=0.
+    w.put_uint(major_version);
     w.put_uint(0);
     w.put_uint(0);
     w.put_uint(0);
@@ -120,43 +122,77 @@ fn sequence_header_body(width: u64, height: u64) -> Vec<u8> {
     w.into_bytes()
 }
 
-/// Build a high-quality picture data-unit body with one slice, depth 0,
-/// Haar-no-shift filter, carrying the explicit `coeffs` (one per pixel,
-/// row-major) for each of the three 4:4:4 components.
+/// Transform-parameter knobs for the HQ picture builders.
+#[derive(Clone, Copy)]
+struct HqParams {
+    /// Sequence major version; version 3 emits extended transform params.
+    major_version: u64,
+    wavelet_index: u64,
+    dwt_depth: u64,
+    /// `Some((wavelet_index_ho, dwt_depth_ho))` writes the §12.4.4 extended
+    /// parameters (requires `major_version >= 3`).
+    ho: Option<(u64, u64)>,
+    qindex: u64,
+}
+
+impl HqParams {
+    /// The bootstrap-round defaults: depth-0 Haar-no-shift, qindex 0.
+    fn depth0() -> Self {
+        HqParams {
+            major_version: 2,
+            wavelet_index: 3,
+            dwt_depth: 0,
+            ho: None,
+            qindex: 0,
+        }
+    }
+}
+
+/// Build a high-quality picture data-unit body with one slice covering the
+/// whole picture, carrying the explicit per-component coefficients (in
+/// subband stream order) with the Annex D default quantization matrix.
 ///
-/// With `dwt_depth == 0` the single LL subband *is* the full picture, so the
-/// IDWT is the identity and `inverse_quant(coeff, 0)` recovers `coeff`
-/// exactly. Returns the body bytes.
-fn hq_picture_body(
-    width: u64,
-    height: u64,
-    picture_number: u32,
-    y: &[i64],
-    c1: &[i64],
-    c2: &[i64],
-) -> Vec<u8> {
+/// With the [`HqParams::depth0`] defaults the single LL subband *is* the
+/// full picture, so the IDWT is the identity and `inverse_quant(coeff, 0)`
+/// recovers `coeff` exactly. Returns the body bytes.
+fn hq_picture_body(p: HqParams, picture_number: u32, y: &[i64], c1: &[i64], c2: &[i64]) -> Vec<u8> {
     let mut w = BitWriter::default();
     // picture_header: picture_number (4-byte literal).
     w.put_nbits(picture_number as u64, 32);
     w.byte_align();
     // transform_parameters:
-    w.put_uint(3); // wavelet_index = 3 (Haar no shift)
-    w.put_uint(0); // dwt_depth = 0
-                   // major_version 2 < 3, so no extended_transform_parameters.
-                   // slice_parameters (HQ): slices_x=1, slices_y=1, prefix_bytes=0, scaler=1.
+    w.put_uint(p.wavelet_index);
+    w.put_uint(p.dwt_depth);
+    if p.major_version >= 3 {
+        // extended_transform_parameters() (§12.4.4).
+        match p.ho {
+            Some((wavelet_index_ho, dwt_depth_ho)) => {
+                w.put_bool(true);
+                w.put_uint(wavelet_index_ho);
+                w.put_bool(true);
+                w.put_uint(dwt_depth_ho);
+            }
+            None => {
+                w.put_bool(false);
+                w.put_bool(false);
+            }
+        }
+    } else {
+        assert!(p.ho.is_none(), "asymmetric params need major_version >= 3");
+    }
+    // slice_parameters (HQ): slices_x=1, slices_y=1, prefix_bytes=0, scaler=1.
     w.put_uint(1);
     w.put_uint(1);
     w.put_uint(0);
     w.put_uint(1);
-    // quant_matrix: custom false -> default for (filter 3, depth 0):
-    // LL value = 0 (Table D.4), so this is a valid default lookup.
+    // quant_matrix: custom false -> Annex D default lookup.
     w.put_bool(false);
     w.byte_align();
 
     // transform_data: one HQ slice.
-    // hq_slice: prefix bytes (0), qindex (1-byte literal) = 0, then per
+    // hq_slice: prefix bytes (0), qindex (1-byte literal), then per
     // component: length code (1 byte) * scaler then the coefficients.
-    w.put_nbits(0, 8); // qindex = 0 -> quantizer 0 -> inverse_quant identity
+    w.put_nbits(p.qindex, 8);
 
     for comp in [y, c1, c2] {
         // Encode the component coefficients into a separate writer to measure
@@ -172,14 +208,20 @@ fn hq_picture_body(
             w.put_nbits(b as u64, 8);
         }
     }
-    let _ = (width, height);
     w.into_bytes()
 }
 
 /// Assemble a full sequence: PI(seq header) seq_header PI(HQ) picture PI(EOS).
-fn build_stream(width: u64, height: u64, y: &[i64], c1: &[i64], c2: &[i64]) -> Vec<u8> {
-    let seq_body = sequence_header_body(width, height);
-    let pic_body = hq_picture_body(width, height, 7, y, c1, c2);
+fn build_stream_with(
+    p: HqParams,
+    width: u64,
+    height: u64,
+    y: &[i64],
+    c1: &[i64],
+    c2: &[i64],
+) -> Vec<u8> {
+    let seq_body = sequence_header_body(width, height, p.major_version);
+    let pic_body = hq_picture_body(p, 7, y, c1, c2);
 
     let mut out = Vec::new();
     // PI #1 -> sequence header. next_offset = 13 + len(seq_body).
@@ -193,6 +235,11 @@ fn build_stream(width: u64, height: u64, y: &[i64], c1: &[i64], c2: &[i64]) -> V
     // PI #3 -> end of sequence.
     parse_info(&mut out, 0x10, 0, pi2_off);
     out
+}
+
+/// [`build_stream_with`] using the bootstrap depth-0 defaults.
+fn build_stream(width: u64, height: u64, y: &[i64], c1: &[i64], c2: &[i64]) -> Vec<u8> {
+    build_stream_with(HqParams::depth0(), width, height, y, c1, c2)
 }
 
 #[test]
@@ -218,6 +265,93 @@ fn hq_depth0_haar_roundtrips_samples() {
     assert_eq!(p.y, expect(&y));
     assert_eq!(p.c1, expect(&c1));
     assert_eq!(p.c2, expect(&c2));
+}
+
+#[test]
+fn hq_asymmetric_mixed_pair_uses_table_d8_defaults() {
+    // 4x1 picture, dwt_depth 0 with one horizontal-only level
+    // (dwt_depth_ho = 1), Haar-no-shift vertically and LeGall horizontally —
+    // the Table D.8 mixed pair, so the default quantization matrix lookup
+    // must succeed without a custom matrix in the stream (L = 2, H1 = 0 at
+    // this depth). qindex 2 makes the two bands quantize differently:
+    // qval(L) = max(2 - 2, 0) = 0 (identity), qval(H) = max(2 - 0, 0) = 2.
+    //
+    // Expected output is computed through the crate's own public quant /
+    // wavelet primitives so the test pins the *plumbing* — stream walk,
+    // extended transform parameters, Annex D lookup, per-band quantizer
+    // assignment, HO synthesis stage — rather than re-deriving the filter
+    // math (covered by the wavelet reversibility tests).
+    use oxideav_vc2::quant::inverse_quant;
+    use oxideav_vc2::wavelet::{h_synthesis, wavelet_filter, Plane};
+
+    let p = HqParams {
+        major_version: 3,
+        wavelet_index: 3,
+        dwt_depth: 0,
+        ho: Some((1, 1)),
+        qindex: 2,
+    };
+    // Subband layout for ho=1, depth=0 on a 4x1 component: L 2x1, H 2x1.
+    // Coefficients per component in stream order: L then H.
+    let y = [12i64, -6, 2, -3];
+    let c = [0i64, 0, 0, 0];
+    let stream = build_stream_with(p, 4, 1, &y, &c, &c);
+    let pics = oxideav_vc2::decode_sequence(&stream).expect("decode");
+    assert_eq!(pics.len(), 1);
+    assert_eq!(pics[0].luma_width, 4);
+    assert_eq!(pics[0].luma_height, 1);
+
+    // Reference path: dequantize each band with its Table D.8 quantizer,
+    // run one horizontal LeGall synthesis stage, offset by +128 (8-bit).
+    let legall = wavelet_filter(1).unwrap();
+    let l_band = Plane {
+        width: 2,
+        height: 1,
+        data: vec![inverse_quant(y[0], 0), inverse_quant(y[1], 0)],
+    };
+    let h_band = Plane {
+        width: 2,
+        height: 1,
+        data: vec![inverse_quant(y[2], 2), inverse_quant(y[3], 2)],
+    };
+    let synth = h_synthesis(&l_band, &h_band, &legall);
+    let expect: Vec<u16> = (0..4)
+        .map(|x| (synth.get(0, x).clamp(-128, 127) + 128) as u16)
+        .collect();
+    assert_eq!(pics[0].y, expect);
+    // With qval(H) = 2 the H coefficients are scaled up by dequantization,
+    // so the decode must NOT equal the identity-quantizer reconstruction.
+    let h_identity = Plane {
+        width: 2,
+        height: 1,
+        data: vec![y[2], y[3]],
+    };
+    let synth_id = h_synthesis(&l_band, &h_identity, &legall);
+    let expect_id: Vec<u16> = (0..4)
+        .map(|x| (synth_id.get(0, x).clamp(-128, 127) + 128) as u16)
+        .collect();
+    assert_ne!(pics[0].y, expect_id, "H-band quantizer must differ from L");
+    assert!(pics[0].c1.iter().all(|&v| v == 128));
+}
+
+#[test]
+fn asymmetric_depths_without_default_require_custom_matrix() {
+    // ho = (wavelet_index_ho 1, dwt_depth_ho 2) with dwt_depth 4: total
+    // depth 6 exceeds the Annex D limit of 5, and no custom matrix is
+    // present -> the decoder must reject the stream, not invent values.
+    let p = HqParams {
+        major_version: 3,
+        wavelet_index: 1,
+        dwt_depth: 4,
+        ho: Some((1, 2)),
+        qindex: 0,
+    };
+    let coeffs = [0i64; 64];
+    let stream = build_stream_with(p, 64, 16, &coeffs, &coeffs, &coeffs);
+    assert!(matches!(
+        oxideav_vc2::decode_sequence(&stream),
+        Err(oxideav_vc2::Error::MissingQuantMatrix)
+    ));
 }
 
 #[test]

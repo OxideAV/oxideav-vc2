@@ -138,8 +138,11 @@ pub fn transform_parameters(
 }
 
 /// `quant_matrix()` (§12.4.5.3) — read a custom matrix or apply the Annex D
-/// default. Only the symmetric (`dwt_depth_ho == 0`) default is built-in;
-/// asymmetric defaults require a custom matrix to be present.
+/// default via `set_quant_matrix()`. Defaults exist for the seven symmetric
+/// filter pairs and the mixed Haar-no-shift / LeGall pair (Tables D.1–D.8),
+/// for `dwt_depth <= 4`, `dwt_depth_ho <= 4` and a total depth of at most 5;
+/// every other combination normatively requires a custom matrix, so its
+/// absence is a stream error.
 fn read_quant_matrix(
     r: &mut BitReader,
     wavelet_index: u64,
@@ -151,16 +154,11 @@ fn read_quant_matrix(
     if custom {
         let total = dwt_depth_ho + dwt_depth;
         let mut matrix = Vec::with_capacity(total as usize + 1);
-        if dwt_depth_ho == 0 {
-            // level 0: LL
-            matrix.push(MatrixLevel::Ll(r.read_uint() as i64));
-        } else {
-            // level 0: L
-            matrix.push(MatrixLevel::Ll(r.read_uint() as i64));
-            // levels 1..=dwt_depth_ho: H (stored as Ll for the single value)
-            for _ in 1..=dwt_depth_ho {
-                matrix.push(MatrixLevel::Ll(r.read_uint() as i64));
-            }
+        // level 0: LL (symmetric) or L (asymmetric).
+        matrix.push(MatrixLevel::Ll(r.read_uint() as i64));
+        // levels 1..=dwt_depth_ho: the horizontal-only H bands.
+        for _ in 1..=dwt_depth_ho {
+            matrix.push(MatrixLevel::H(r.read_uint() as i64));
         }
         for _ in (dwt_depth_ho + 1)..=(dwt_depth_ho + dwt_depth) {
             let hl = r.read_uint() as i64;
@@ -170,11 +168,9 @@ fn read_quant_matrix(
         }
         Ok(matrix)
     } else {
-        // set_quant_matrix() — symmetric default only.
-        if dwt_depth_ho != 0 || wavelet_index_ho != wavelet_index {
-            return Err(Error::MissingQuantMatrix);
-        }
-        quant::default_quant_matrix(wavelet_index, dwt_depth).ok_or(Error::MissingQuantMatrix)
+        // set_quant_matrix() — Annex D lookup.
+        quant::default_quant_matrix_full(wavelet_index, wavelet_index_ho, dwt_depth, dwt_depth_ho)
+            .ok_or(Error::MissingQuantMatrix)
     }
 }
 
@@ -276,7 +272,7 @@ fn slice_quantizers(qindex: u64, tp: &TransformParameters) -> Vec<u64> {
     for &(level, orient) in &layout {
         // The matrix value for this (level, orient).
         let matrix_val = match tp.quant_matrix.get(level as usize) {
-            Some(MatrixLevel::Ll(v)) => *v,
+            Some(MatrixLevel::Ll(v)) | Some(MatrixLevel::H(v)) => *v,
             Some(MatrixLevel::Ac { hl, lh, hh }) => match orient {
                 Orient::HL => *hl,
                 Orient::LH => *lh,
