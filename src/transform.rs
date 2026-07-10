@@ -295,6 +295,45 @@ pub struct TransformData {
     pub c2: ComponentCoeffs,
 }
 
+/// `initialize_wavelet_data()` (§13.2.2) for all three components — the
+/// zeroed coefficient store slices are unpacked into. Also the state
+/// initialised by a fragmented picture's setup fragment (§14.3).
+pub fn init_transform_data(seq: &SequenceHeader, tp: &TransformParameters) -> TransformData {
+    let cp = &seq.coding_parameters;
+    TransformData {
+        y: init_component(cp.luma_width, cp.luma_height, tp),
+        c1: init_component(cp.color_diff_width, cp.color_diff_height, tp),
+        c2: init_component(cp.color_diff_width, cp.color_diff_height, tp),
+    }
+}
+
+/// `slice(sx, sy)` (§13.5.2): unpack one slice into the coefficient store.
+/// Called in raster order by [`transform_data`] for picture data units and
+/// per carried slice by fragment data units (§14.4).
+pub fn unpack_slice(
+    r: &mut BitReader,
+    tp: &TransformParameters,
+    td: &mut TransformData,
+    sx: u64,
+    sy: u64,
+    kind: PictureKind,
+) -> Result<()> {
+    match kind {
+        PictureKind::LowDelay => ld_slice(r, tp, td, sx, sy),
+        PictureKind::HighQuality => hq_slice(r, tp, td, sx, sy),
+    }
+}
+
+/// The `dc_prediction` pass over the level-0 band of every component
+/// (§13.4), run once all slices are present. Level 0 is the LL band for a
+/// symmetric transform and the L band otherwise (§14.4 spells out both; the
+/// band occupies index 0 of the layout in either case).
+pub fn apply_dc_prediction(td: &mut TransformData) {
+    dc_prediction(&mut td.y.bands[0]);
+    dc_prediction(&mut td.c1.bands[0]);
+    dc_prediction(&mut td.c2.bands[0]);
+}
+
 /// `transform_data()` (§13.5.2): unpack every slice into the coefficient
 /// store and apply DC prediction for LD pictures.
 pub fn transform_data(
@@ -303,26 +342,16 @@ pub fn transform_data(
     tp: &TransformParameters,
     kind: PictureKind,
 ) -> Result<TransformData> {
-    let cp = &seq.coding_parameters;
-    let mut td = TransformData {
-        y: init_component(cp.luma_width, cp.luma_height, tp),
-        c1: init_component(cp.color_diff_width, cp.color_diff_height, tp),
-        c2: init_component(cp.color_diff_width, cp.color_diff_height, tp),
-    };
+    let mut td = init_transform_data(seq, tp);
 
     for sy in 0..tp.slices_y {
         for sx in 0..tp.slices_x {
-            match kind {
-                PictureKind::LowDelay => ld_slice(r, tp, &mut td, sx, sy)?,
-                PictureKind::HighQuality => hq_slice(r, tp, &mut td, sx, sy)?,
-            }
+            unpack_slice(r, tp, &mut td, sx, sy, kind)?;
         }
     }
 
     if kind.uses_dc_prediction() {
-        dc_prediction(&mut td.y.bands[0]);
-        dc_prediction(&mut td.c1.bands[0]);
-        dc_prediction(&mut td.c2.bands[0]);
+        apply_dc_prediction(&mut td);
     }
 
     Ok(td)

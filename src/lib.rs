@@ -18,8 +18,13 @@
 //!   used inside slices. See [`bitio`].
 //! * **Stream structure** (§10) — parse-info headers ("BBCD"), the Table 4 /
 //!   Table 5 parse-code classification, and the `parse_sequence` walk over
-//!   data units, skipping auxiliary / padding / unknown units. See
-//!   [`sequence`].
+//!   data units, skipping auxiliary / padding / unknown units. Concatenated
+//!   sequences (a VC-2 stream, §10.3) decode in one pass. See [`sequence`].
+//! * **Picture fragments** (§14) — setup / data fragment parsing, slice
+//!   reassembly in raster order with the §14.1/§14.2 stream constraints
+//!   enforced, and deferred DC prediction once the picture completes. The
+//!   stateful [`SequenceDecoder`] keeps a partially assembled picture
+//!   across [`SequenceDecoder::push`] calls for packetized input.
 //! * **Sequence header** (§11) — parse parameters, the Annex B base-format
 //!   defaults (decode-critical fields), source-parameter overrides, preset
 //!   signal ranges (Table 10) and `set_coding_parameters` (§11.6). See
@@ -38,9 +43,6 @@
 //!
 //! ## Not yet implemented
 //!
-//! * Picture **fragments** (§14) reassembly.
-//! * The **asymmetric** (`dwt_depth_ho > 0`) Annex D *default* matrices — a
-//!   custom quantization matrix is required in that case (and is parsed).
 //! * `oxideav-core` `Decoder` factory wiring (the `registry` feature
 //!   currently registers an empty entry-point, mirroring the VP6 scaffold).
 //!
@@ -65,14 +67,19 @@ pub mod wavelet;
 
 pub use error::{Error, Result};
 pub use picture::DecodedPicture;
-pub use sequence::{classify, DataUnit, ParseInfo, PARSE_INFO_PREFIX};
+pub use sequence::{
+    classify, DataUnit, FragmentHeader, ParseInfo, SequenceDecoder, PARSE_INFO_PREFIX,
+};
 pub use transform::PictureKind;
 
-/// Decode a complete VC-2 sequence into its constituent pictures.
+/// Decode a complete VC-2 stream into its constituent pictures.
 ///
 /// The input is a raw VC-2 byte stream that begins with a parse-info header
-/// ("BBCD") and ends with an end-of-sequence data unit (§10.4.1). Each
-/// returned [`DecodedPicture`] carries clipped, unsigned component planes.
+/// ("BBCD") and holds one or more complete sequences, each ending with an
+/// end-of-sequence data unit (§10.3 / §10.4.1). Fragmented pictures (§14)
+/// are reassembled transparently. Each returned [`DecodedPicture`] carries
+/// clipped, unsigned component planes. For chunked / packetized input use
+/// [`SequenceDecoder`] directly.
 pub fn decode_sequence(data: &[u8]) -> Result<Vec<DecodedPicture>> {
     sequence::parse_sequence(data)
 }

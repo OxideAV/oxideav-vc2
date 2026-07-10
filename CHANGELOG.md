@@ -7,6 +7,23 @@ on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Picture fragments (§14).** Setup / data fragment headers
+  (`fragment_header`, §14.2), slice reassembly in raster order and the
+  deferred DC-prediction pass once all slices arrive (§14.4). The new
+  stateful `SequenceDecoder` walker retains the sequence header and any
+  partially assembled fragmented picture across `push` calls, so
+  packetized input works; `decode_sequence` / `parse_sequence` reassemble
+  fragments transparently and now also decode concatenated sequences (a
+  VC-2 stream, §10.3), resetting per-sequence state at each
+  end-of-sequence unit. The §14.1/§14.2 constraints are enforced as
+  stream errors: no data fragment without a setup fragment, matching
+  picture numbers and parse-code kind, no omitted / repeated /
+  out-of-raster-order slices, no interleaved non-fragmented pictures or
+  second setup fragments, and no end of sequence while a picture is
+  incomplete. Fragment-vs-picture equality tests (HQ and LD with DC
+  prediction), chunked-push reassembly, and one test per constraint
+  violation.
+
 - **Complete Annex D default quantization matrices.** The default-matrix
   lookup now covers every combination the annex defines: the asymmetric
   (`dwt_depth_ho > 0`) blocks of Tables D.1–D.7 for all seven symmetric
