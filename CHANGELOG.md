@@ -7,6 +7,22 @@ on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`oxideav-core` `Decoder` wiring.** The `registry` feature's empty
+  entry point is replaced by a real registration: `register(ctx)`
+  installs a `"vc2"` video decoder (intra-only, lossy + lossless) into
+  the codec registry, and `make_decoder(params)` is the direct factory
+  (workspace dual-API convention). `Vc2Decoder` wraps the stateful
+  `SequenceDecoder`, so packets carry whole VC-2 data units and
+  fragmented pictures may span packets; frames are emitted as planar
+  YUV 4:4:4/4:2:2/4:2:0 at 8 bit (byte planes) or 10/12 bit
+  (little-endian 16-bit words), an extradata blob starting with a
+  parse-info prefix primes the walker (out-of-band sequence header),
+  `flush` surfaces truncated fragmented pictures as errors, and `reset`
+  clears all carry-over state. `DecodedPicture` now carries
+  `luma_depth` / `color_diff_depth`. 16-bit output presets are reported
+  unsupported by the wrapper (no matching core pixel format yet);
+  the standalone API still decodes them.
+
 - **Picture fragments (§14).** Setup / data fragment headers
   (`fragment_header`, §14.2), slice reassembly in raster order and the
   deferred DC-prediction pass once all slices arrive (§14.4). The new

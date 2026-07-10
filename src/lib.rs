@@ -41,10 +41,14 @@
 //!   removal (§15.4.5), clipping (§15.5) and unsigned offsetting. See
 //!   [`wavelet`] and [`picture`].
 //!
-//! ## Not yet implemented
+//! ## `oxideav-core` integration
 //!
-//! * `oxideav-core` `Decoder` factory wiring (the `registry` feature
-//!   currently registers an empty entry-point, mirroring the VP6 scaffold).
+//! With the default-on `registry` feature the crate exposes the workspace
+//! dual API: the [`register`] entry point installs a `"vc2"` decoder into a
+//! [`oxideav_core::RuntimeContext`] codec registry, and [`make_decoder`] is
+//! the direct factory. Packets carry whole VC-2 data units (the parse-info
+//! framing is the codec's own); fragmented pictures may span packets. See
+//! [`decoder`].
 //!
 //! ## Quick start (standalone)
 //!
@@ -85,19 +89,10 @@ pub fn decode_sequence(data: &[u8]) -> Result<Vec<DecodedPicture>> {
 }
 
 #[cfg(feature = "registry")]
-mod registry {
-    use oxideav_core::RuntimeContext;
-
-    /// Codec registration entry point.
-    ///
-    /// The standalone decoder ([`crate::decode_sequence`]) is complete, but
-    /// the `oxideav-core` [`oxideav_core::Decoder`] factory — which requires
-    /// mapping a VC-2 `CodecId`, threading `CodecParameters`, and packing
-    /// the planes into a [`oxideav_core::VideoFrame`] — is intentionally
-    /// deferred to a follow-up round, mirroring the VP6 scaffold. Until then
-    /// the entry point registers nothing.
-    pub fn register(_ctx: &mut RuntimeContext) {}
-}
+pub mod decoder;
 
 #[cfg(feature = "registry")]
-oxideav_core::register!("vc2", registry::register);
+pub use decoder::{make_decoder, register, Vc2Decoder, CODEC_ID};
+
+#[cfg(feature = "registry")]
+oxideav_core::register!("vc2", decoder::register);

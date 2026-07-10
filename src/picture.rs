@@ -16,6 +16,11 @@ pub struct DecodedPicture {
     pub luma_height: usize,
     pub color_diff_width: usize,
     pub color_diff_height: usize,
+    /// Luma bit depth (`video_depth`, §11.6.3): samples span
+    /// `0..2^luma_depth`.
+    pub luma_depth: u32,
+    /// Colour-difference bit depth (§11.6.3).
+    pub color_diff_depth: u32,
     /// Luma plane (Y), row-major, unsigned.
     pub y: Vec<u16>,
     /// First colour-difference plane (C1), row-major, unsigned.
@@ -91,6 +96,8 @@ pub fn picture_decode(parsed: &ParsedPicture, seq: &SequenceHeader) -> Result<De
         luma_height: cp.luma_height as usize,
         color_diff_width: cp.color_diff_width as usize,
         color_diff_height: cp.color_diff_height as usize,
+        luma_depth: cp.luma_depth,
+        color_diff_depth: cp.color_diff_depth,
         y,
         c1,
         c2,

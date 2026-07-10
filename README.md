@@ -32,11 +32,15 @@ end-to-end on hand-assembled VC-2 streams.
 | Picture fragments (setup/data, reassembly, constraints) | §14 | ✅ raster-order slice reassembly, deferred DC prediction, §14.1/§14.2 violations rejected; chunk-fed via `SequenceDecoder::push` |
 | IDWT lifting filters (all 7 wavelets) | §15.4.4 / Tables 16–22 | ✅ reversibility-tested (LeGall) |
 | Component IDWT + pad removal + clip + offset | §15 | ✅ |
+| `oxideav-core` `Decoder` (registry + direct factory) | — | ✅ `register(ctx)` + `make_decoder`; 8/10/12-bit planar YUV output; fragments may span packets |
 
 ### Not yet implemented
 
-- `oxideav-core` `Decoder` factory wiring (the `registry` feature registers
-  an empty entry-point for now, mirroring the VP6 scaffold).
+- 16-bit output presets (signal-range indices 7/8) have no matching
+  `oxideav-core` planar pixel format yet; the standalone API decodes them,
+  the `Decoder` wrapper reports them unsupported.
+- No container tags are claimed yet (FourCC / Matroska mapping for VC-2 in
+  containers is deliberately left to a coordinated fleet decision).
 
 ## Usage (standalone)
 
@@ -47,6 +51,17 @@ for pic in &pictures {
     println!("picture {} is {}x{}", pic.picture_number, pic.luma_width, pic.luma_height);
 }
 ```
+
+For chunked / packetized input, `SequenceDecoder::push` keeps the sequence
+header and any partially assembled fragmented picture across calls.
+
+## Usage (oxideav registry)
+
+With the default `registry` feature the crate follows the workspace dual
+API: `oxideav_vc2::register(&mut ctx)` installs a `"vc2"` decoder into the
+codec registry, and `oxideav_vc2::make_decoder(&params)` is the direct
+factory. Packets must carry whole VC-2 data units (the parse-info headers
+are the codec's own framing); fragmented pictures may span packets.
 
 The crate builds with `--no-default-features` for a dependency-free standalone
 decoder; the default `registry` feature pulls in `oxideav-core` for fleet
