@@ -7,6 +7,35 @@ on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Hostile-stream hardening.** Truncated, malformed and adversarial
+  inputs now produce prompt, deterministic errors instead of hangs,
+  panics or unbounded allocations:
+  - `BitReader` latches an `overrun` flag once any bit is consumed past
+    the end of the input; the exp-Golomb readers bail out instead of
+    spinning forever on the endless zero bits (previously an infinite
+    loop in release builds), absurd in-band prefixes saturate instead of
+    overflowing, and the structured parsers (parse-info, sequence
+    header, fragment header, transform parameters, per-slice and
+    end-of-picture) turn the flag into `UnexpectedEof`.
+  - `quant_factor` computes in 128 bits and saturates (a 1-byte HQ
+    qindex of 255 previously overflowed `i64` and panicked);
+    `inverse_quant` saturates; the lifting, bit-shift and DC-prediction
+    arithmetic wraps deterministically (the §15.5 clip bounds output).
+  - Documented implementation caps rejected at parse time: total
+    transform depth (16), padded picture area (2^26 samples), slice
+    count (2^22), LD slice-bytes numerator and HQ prefix/scaler bytes;
+    zero frame dimensions and signal excursions outside 1..=65535 (the
+    16-bit output range) are rejected; a low-delay slice smaller than
+    its own 7-bit header errors instead of underflowing.
+  - `parse_sequence` / `decode_sequence` now require the terminating
+    end-of-sequence data unit (§10.4.1), so a stream truncated at a
+    data-unit boundary no longer decodes silently;
+    `SequenceDecoder::mid_sequence()` exposes the state for chunked
+    callers.
+  - Tests: every-truncation-point sweep over a good stream, one test per
+    cap, a max-qindex decode, an over-long HQ length code, and a
+    deterministic garbage fuzz-lite loop.
+
 - **`oxideav-core` `Decoder` wiring.** The `registry` feature's empty
   entry point is replaced by a real registration: `register(ctx)`
   installs a `"vc2"` video decoder (intra-only, lossy + lossless) into

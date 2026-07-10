@@ -13,16 +13,25 @@
 //! stream are fully supported by the parser and do not consult this table.
 
 /// `quant_factor(index)` (§13.3.2).
+///
+/// The spec's integer arithmetic is unbounded; here the exponential term
+/// is computed in 128 bits and the result saturates at `i64::MAX` for the
+/// absurd indices only malformed streams carry (a 1-byte HQ qindex can
+/// reach 255; anything past index ~247 exceeds an `i64` factor). Every
+/// representable factor is exact.
 #[inline]
 pub fn quant_factor(index: u64) -> i64 {
-    let base: i64 = 1i64 << (index / 4);
-    match index % 4 {
+    // 2^105 already saturates the i64 result below even after the divide;
+    // cap the shift so the i128 intermediate cannot overflow either.
+    let base: i128 = 1i128 << (index / 4).min(105) as u32;
+    let v: i128 = match index % 4 {
         0 => 4 * base,
         1 => ((503829 * base) + 52958) / 105917,
         2 => ((665857 * base) + 58854) / 117708,
         3 => ((440253 * base) + 32722) / 65444,
         _ => unreachable!(),
-    }
+    };
+    v.min(i64::MAX as i128) as i64
 }
 
 /// `quant_offset(index)` (§13.3.2).
@@ -31,7 +40,7 @@ pub fn quant_offset(index: u64) -> i64 {
     match index {
         0 => 1,
         1 => 2,
-        _ => (quant_factor(index) + 1) / 2,
+        _ => quant_factor(index).saturating_add(1) / 2,
     }
 }
 
@@ -39,13 +48,15 @@ pub fn quant_offset(index: u64) -> i64 {
 ///
 /// Dead-zone inverse quantization: scale the magnitude by the quant factor,
 /// add the offset and a rounding `+2`, divide by 4, then re-apply the sign.
+/// Saturating arithmetic keeps hostile coefficient/index pairs finite (the
+/// output is clipped to the video range at the end of the pipeline anyway).
 #[inline]
 pub fn inverse_quant(quantized_coeff: i64, quant_index: u64) -> i64 {
-    let mut magnitude = quantized_coeff.abs();
+    let mut magnitude = quantized_coeff.saturating_abs();
     if magnitude != 0 {
-        magnitude *= quant_factor(quant_index);
-        magnitude += quant_offset(quant_index);
-        magnitude += 2;
+        magnitude = magnitude.saturating_mul(quant_factor(quant_index));
+        magnitude = magnitude.saturating_add(quant_offset(quant_index));
+        magnitude = magnitude.saturating_add(2);
         magnitude /= 4;
     }
     let sign = match quantized_coeff.cmp(&0) {

@@ -11,6 +11,12 @@
 //! The reader maintains `state[current_byte]` and `state[next_bit]` as
 //! described in A.2.1: bits are consumed MSB first, `next_bit` runs from
 //! 7 down to 0, and a fresh byte is fetched when it underflows.
+//!
+//! Reads past the end of the input surface zero bits (A.2.2 leaves them
+//! undefined) and latch the [`BitReader::overrun`] flag, so structured
+//! parsers can turn a truncated stream into a deterministic
+//! [`Error::UnexpectedEof`] instead of consuming fabricated data — and so
+//! the variable-length decoders cannot spin forever on the endless zeros.
 
 use crate::Error;
 
@@ -26,6 +32,8 @@ pub struct BitReader<'a> {
     next_bit: i32,
     /// Remaining bit budget for bounded-block reads (`state[bits_left]`).
     bits_left: u64,
+    /// Latched once any bit is consumed from beyond the end of `data`.
+    overrun: bool,
 }
 
 impl<'a> BitReader<'a> {
@@ -35,7 +43,9 @@ impl<'a> BitReader<'a> {
     /// of the stream and `state[next_bit]` to 7.
     pub fn new(data: &'a [u8]) -> Self {
         let (current_byte, pos) = if data.is_empty() {
-            (0, 0)
+            // As if a synthetic past-the-end byte had been prefetched, so
+            // the very first read latches `overrun`.
+            (0, 1)
         } else {
             (data[0], 1)
         };
@@ -45,7 +55,16 @@ impl<'a> BitReader<'a> {
             current_byte,
             next_bit: 7,
             bits_left: 0,
+            overrun: false,
         }
+    }
+
+    /// True once any bit has been consumed from beyond the end of the
+    /// input. Such bits read as zero; callers of the structured parsers
+    /// check this to reject truncated streams.
+    #[inline]
+    pub fn overrun(&self) -> bool {
+        self.overrun
     }
 
     /// Byte offset of the byte currently being consumed, relative to the
@@ -79,6 +98,10 @@ impl<'a> BitReader<'a> {
     /// `read_bit()` (A.2.3).
     #[inline]
     pub fn read_bit(&mut self) -> u32 {
+        if self.pos > self.data.len() {
+            // `current_byte` is the synthetic past-the-end byte.
+            self.overrun = true;
+        }
         let bit = ((self.current_byte >> self.next_bit) & 1) as u32;
         self.next_bit -= 1;
         if self.next_bit < 0 {
@@ -128,12 +151,27 @@ impl<'a> BitReader<'a> {
     }
 
     /// `read_uint()` (A.4.3): unsigned interleaved exp-Golomb.
+    ///
+    /// Robustness: past the end of the stream the reader surfaces zero
+    /// bits forever, which look like an unterminated prefix — the loop
+    /// bails out with `u64::MAX` once [`Self::overrun`] latches (callers
+    /// reject the stream). Absurdly long in-band prefixes saturate at
+    /// `u64::MAX - 1` instead of overflowing.
     pub fn read_uint(&mut self) -> u64 {
         let mut value: u64 = 1;
         while self.read_bit() == 0 {
-            value <<= 1;
+            if self.overrun {
+                return u64::MAX;
+            }
+            // Saturating shift-left by one (checked_shl only guards the
+            // shift amount, not value overflow).
+            value = if value >> 63 != 0 {
+                u64::MAX
+            } else {
+                value << 1
+            };
             if self.read_bit() == 1 {
-                value += 1;
+                value = value.saturating_add(1);
             }
         }
         value - 1
@@ -141,7 +179,7 @@ impl<'a> BitReader<'a> {
 
     /// `read_sint()` (A.4.4): signed interleaved exp-Golomb.
     pub fn read_sint(&mut self) -> i64 {
-        let value = self.read_uint() as i64;
+        let value = self.read_uint().min(i64::MAX as u64) as i64;
         if value != 0 && self.read_bit() == 1 {
             -value
         } else {
@@ -168,13 +206,22 @@ impl<'a> BitReader<'a> {
         }
     }
 
-    /// `read_uintb()` (A.4.3, bounded variant).
+    /// `read_uintb()` (A.4.3, bounded variant). Same overrun / saturation
+    /// robustness as [`Self::read_uint`] (a huge `bits_left` budget over a
+    /// truncated stream must not spin).
     pub fn read_uintb(&mut self) -> u64 {
         let mut value: u64 = 1;
         while self.read_bitb() == 0 {
-            value <<= 1;
+            if self.overrun {
+                return u64::MAX;
+            }
+            value = if value >> 63 != 0 {
+                u64::MAX
+            } else {
+                value << 1
+            };
             if self.read_bitb() == 1 {
-                value += 1;
+                value = value.saturating_add(1);
             }
         }
         value - 1
@@ -182,7 +229,7 @@ impl<'a> BitReader<'a> {
 
     /// `read_sintb()` (A.4.4, bounded variant).
     pub fn read_sintb(&mut self) -> i64 {
-        let value = self.read_uintb() as i64;
+        let value = self.read_uintb().min(i64::MAX as u64) as i64;
         if value != 0 && self.read_bitb() == 1 {
             -value
         } else {
@@ -190,18 +237,28 @@ impl<'a> BitReader<'a> {
         }
     }
 
-    /// `flush_inputb()` (A.4.2): discard the remainder of the block.
+    /// `flush_inputb()` (A.4.2): discard the remainder of the block. A
+    /// truncated stream stops the drain early (there is nothing left to
+    /// discard past the end).
     pub fn flush_inputb(&mut self) {
         while self.bits_left > 0 {
+            if self.overrun {
+                self.bits_left = 0;
+                return;
+            }
             self.read_bit();
             self.bits_left -= 1;
         }
     }
 
     /// Skip `n` whole bytes (used for slice prefix bytes / data units).
+    /// Errors once the skip runs past the end of the stream.
     pub fn skip_bytes(&mut self, n: u64) -> Result<(), Error> {
         for _ in 0..n {
             self.read_uint_lit(1);
+            if self.overrun {
+                return Err(Error::UnexpectedEof);
+            }
         }
         Ok(())
     }
@@ -262,6 +319,66 @@ mod tests {
             let mut r = BitReader::new(&bytes);
             assert_eq!(r.read_sint(), *expected, "bits {bits:?}");
         }
+    }
+
+    #[test]
+    fn read_uint_terminates_at_eof() {
+        // Past the end the reader surfaces zero bits forever, which look
+        // like an unterminated exp-Golomb prefix; the loop must bail out
+        // (returning u64::MAX) with the overrun flag latched, not spin.
+        let mut r = BitReader::new(&[0x00, 0x00]);
+        assert_eq!(r.read_uint(), u64::MAX);
+        assert!(r.overrun());
+        // Same for the bounded variant with a huge budget.
+        let mut r = BitReader::new(&[0x00]);
+        r.set_bits_left(u64::MAX);
+        assert_eq!(r.read_uintb(), u64::MAX);
+        assert!(r.overrun());
+    }
+
+    #[test]
+    fn read_uint_saturates_absurd_in_band_prefix() {
+        // 40 zero bytes = 160 (follow=0, data=0) pairs, then a terminating
+        // 1: encodes a value beyond 64 bits. Must saturate, not overflow.
+        let mut data = vec![0u8; 40];
+        data.push(0x80);
+        let mut r = BitReader::new(&data);
+        assert_eq!(r.read_uint(), u64::MAX - 1);
+        assert!(!r.overrun());
+    }
+
+    #[test]
+    fn exact_final_byte_is_not_overrun() {
+        let mut r = BitReader::new(&[0xAB]);
+        assert_eq!(r.read_uint_lit(1), 0xAB);
+        assert!(!r.overrun());
+        assert!(r.is_end_of_stream());
+        r.read_bit();
+        assert!(r.overrun());
+    }
+
+    #[test]
+    fn empty_input_overruns_immediately() {
+        let mut r = BitReader::new(&[]);
+        assert!(r.is_end_of_stream());
+        r.read_bit();
+        assert!(r.overrun());
+    }
+
+    #[test]
+    fn skip_bytes_errors_past_end() {
+        let mut r = BitReader::new(&[1, 2, 3]);
+        assert!(r.skip_bytes(3).is_ok());
+        assert!(!r.overrun());
+        assert!(r.skip_bytes(1).is_err());
+    }
+
+    #[test]
+    fn flush_inputb_stops_at_eof() {
+        let mut r = BitReader::new(&[0xFF]);
+        r.set_bits_left(u64::MAX);
+        r.flush_inputb(); // must terminate promptly
+        assert!(r.overrun());
     }
 
     #[test]

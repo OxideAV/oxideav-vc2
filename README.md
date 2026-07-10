@@ -33,6 +33,7 @@ end-to-end on hand-assembled VC-2 streams.
 | IDWT lifting filters (all 7 wavelets) | §15.4.4 / Tables 16–22 | ✅ reversibility-tested (LeGall) |
 | Component IDWT + pad removal + clip + offset | §15 | ✅ |
 | `oxideav-core` `Decoder` (registry + direct factory) | — | ✅ `register(ctx)` + `make_decoder`; 8/10/12-bit planar YUV output; fragments may span packets |
+| Hostile-input hardening | — | ✅ truncation → `UnexpectedEof` at every cut point; saturating VLC/quant math; documented caps on depth / area / slice counts; garbage fuzz-lite in CI |
 
 ### Not yet implemented
 

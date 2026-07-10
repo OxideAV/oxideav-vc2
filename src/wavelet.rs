@@ -199,6 +199,12 @@ pub fn wavelet_filter(index: u64) -> Option<WaveletFilter> {
 }
 
 /// Apply one lifting stage to a 1-D signal `a` (§15.4.4.1).
+///
+/// The lifting arithmetic wraps on overflow: the spec's integers are
+/// unbounded and every well-formed stream stays far inside `i64`, but a
+/// hostile stream can drive dequantized coefficients near `i64::MAX` —
+/// wrapping keeps the (garbage-in, garbage-out) result deterministic and
+/// panic-free, and the §15.5 clip bounds the final output.
 fn apply_lift(a: &mut [i64], stage: &LiftStage) {
     let l = stage.taps.len() as i32;
     let d = stage.d;
@@ -225,14 +231,18 @@ fn apply_lift(a: &mut [i64], stage: &LiftStage) {
                     p
                 }
             };
-            sum += stage.taps[(i - d) as usize] * a[pos as usize];
+            sum = sum.wrapping_add(stage.taps[(i - d) as usize].wrapping_mul(a[pos as usize]));
         }
-        let delta = (sum + rounding) >> s;
+        let delta = sum.wrapping_add(rounding) >> s;
         match stage.kind {
-            LiftType::Type1 => a[(2 * n) as usize] += delta,
-            LiftType::Type2 => a[(2 * n) as usize] -= delta,
-            LiftType::Type3 => a[(2 * n + 1) as usize] += delta,
-            LiftType::Type4 => a[(2 * n + 1) as usize] -= delta,
+            LiftType::Type1 => a[(2 * n) as usize] = a[(2 * n) as usize].wrapping_add(delta),
+            LiftType::Type2 => a[(2 * n) as usize] = a[(2 * n) as usize].wrapping_sub(delta),
+            LiftType::Type3 => {
+                a[(2 * n + 1) as usize] = a[(2 * n + 1) as usize].wrapping_add(delta)
+            }
+            LiftType::Type4 => {
+                a[(2 * n + 1) as usize] = a[(2 * n + 1) as usize].wrapping_sub(delta)
+            }
         }
     }
 }
@@ -356,7 +366,7 @@ fn apply_bit_shift(synth: &mut Plane, shift: u32) {
     if shift > 0 {
         let add = 1i64 << (shift - 1);
         for v in synth.data.iter_mut() {
-            *v = (*v + add) >> shift;
+            *v = v.wrapping_add(add) >> shift;
         }
     }
 }

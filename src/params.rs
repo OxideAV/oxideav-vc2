@@ -321,6 +321,24 @@ pub fn sequence_header(r: &mut BitReader) -> Result<SequenceHeader> {
     let base_video_format = r.read_uint();
     let video_parameters = source_parameters(r, base_video_format)?;
     let picture_coding_mode = r.read_uint();
+    if r.overrun() {
+        return Err(Error::UnexpectedEof);
+    }
+    if video_parameters.frame_width == 0 || video_parameters.frame_height == 0 {
+        return Err(Error::InvalidValue("zero frame dimensions"));
+    }
+    // The decoded planes are 16-bit unsigned samples; excursions beyond
+    // 16 bits are unrepresentable (the deepest Table 10 preset is 65535)
+    // and would otherwise overflow the video-depth derivation.
+    if video_parameters.luma_excursion == 0
+        || video_parameters.luma_excursion > u16::MAX as u64
+        || video_parameters.color_diff_excursion == 0
+        || video_parameters.color_diff_excursion > u16::MAX as u64
+    {
+        return Err(Error::InvalidValue(
+            "signal excursion outside the representable 1..=65535 range",
+        ));
+    }
     let coding_parameters = set_coding_parameters(&video_parameters, picture_coding_mode);
     Ok(SequenceHeader {
         parse_parameters,

@@ -65,6 +65,32 @@ impl TransformParameters {
     }
 }
 
+/// Implementation cap on `dwt_depth_ho + dwt_depth`. The spec leaves the
+/// depths unbounded (a custom quantization matrix covers any depth), but
+/// each extra level doubles the pad granularity — beyond this even an 8K
+/// frame is pure padding, so deeper values only ever appear in hostile
+/// streams trying to force absurd shifts and allocations.
+pub const MAX_TOTAL_TRANSFORM_DEPTH: u64 = 16;
+
+/// Implementation cap on the padded luma area (samples). Comfortably twice
+/// the largest Annex B format (8K at 7680x4320 = 33.2 M samples) while
+/// keeping hostile dimension/depth pairs from provoking multi-gigabyte
+/// coefficient allocations.
+pub const MAX_PADDED_AREA: u64 = 1 << 26;
+
+/// Implementation cap on `slices_x * slices_y` — real streams use
+/// hundreds-to-thousands of slices; this bounds hostile per-picture work.
+pub const MAX_SLICES: u64 = 1 << 22;
+
+/// Implementation caps on the byte-count parameters of §12.4.5.2, sized so
+/// downstream products (`slice_number * numerator`, `8 * scaler * length`)
+/// stay far from overflow.
+pub const MAX_SLICE_BYTES_NUMERATOR: u64 = 1 << 32;
+/// See [`MAX_SLICE_BYTES_NUMERATOR`].
+pub const MAX_SLICE_PREFIX_BYTES: u64 = 1 << 16;
+/// See [`MAX_SLICE_BYTES_NUMERATOR`].
+pub const MAX_SLICE_SIZE_SCALER: u64 = 1 << 16;
+
 /// `transform_parameters()` (§12.4.1).
 pub fn transform_parameters(
     r: &mut BitReader,
@@ -90,12 +116,52 @@ pub fn transform_parameters(
     if wavelet_index_ho > 6 {
         return Err(Error::UnsupportedWaveletIndex(wavelet_index_ho));
     }
+    if dwt_depth.saturating_add(dwt_depth_ho) > MAX_TOTAL_TRANSFORM_DEPTH {
+        return Err(Error::InvalidValue(
+            "total transform depth exceeds the implementation cap",
+        ));
+    }
+    // Padded-dimension guard: the coefficient store rounds each component
+    // up to a multiple of 2^depth per axis (§13.2.3); bound the resulting
+    // allocation before any plane is created. Chroma is never larger than
+    // luma, so checking luma suffices.
+    {
+        let cp = &seq.coding_parameters;
+        let scale_w = 1u64 << (dwt_depth_ho + dwt_depth);
+        let scale_h = 1u64 << dwt_depth;
+        let pw = cp
+            .luma_width
+            .div_ceil(scale_w)
+            .checked_mul(scale_w)
+            .ok_or(Error::InvalidValue("padded luma width overflows"))?;
+        let ph = cp
+            .luma_height
+            .div_ceil(scale_h)
+            .checked_mul(scale_h)
+            .ok_or(Error::InvalidValue("padded luma height overflows"))?;
+        match pw.checked_mul(ph) {
+            Some(area) if area <= MAX_PADDED_AREA => {}
+            _ => {
+                return Err(Error::InvalidValue(
+                    "padded picture area exceeds the implementation cap",
+                ))
+            }
+        }
+    }
 
     // slice_parameters() (§12.4.5.2).
     let slices_x = r.read_uint();
     let slices_y = r.read_uint();
     if slices_x == 0 || slices_y == 0 {
         return Err(Error::InvalidValue("slices_x / slices_y must be >= 1"));
+    }
+    match slices_x.checked_mul(slices_y) {
+        Some(n) if n <= MAX_SLICES => {}
+        _ => {
+            return Err(Error::InvalidValue(
+                "slice count exceeds the implementation cap",
+            ))
+        }
     }
     let mut slice_bytes_numerator = 0;
     let mut slice_bytes_denominator = 1;
@@ -108,6 +174,11 @@ pub fn transform_parameters(
             if slice_bytes_denominator == 0 {
                 return Err(Error::InvalidValue("slice_bytes_denominator must be >= 1"));
             }
+            if slice_bytes_numerator > MAX_SLICE_BYTES_NUMERATOR {
+                return Err(Error::InvalidValue(
+                    "slice_bytes_numerator exceeds the implementation cap",
+                ));
+            }
         }
         PictureKind::HighQuality => {
             slice_prefix_bytes = r.read_uint();
@@ -115,12 +186,26 @@ pub fn transform_parameters(
             if slice_size_scaler == 0 {
                 return Err(Error::InvalidValue("slice_size_scaler must be >= 1"));
             }
+            if slice_prefix_bytes > MAX_SLICE_PREFIX_BYTES {
+                return Err(Error::InvalidValue(
+                    "slice_prefix_bytes exceeds the implementation cap",
+                ));
+            }
+            if slice_size_scaler > MAX_SLICE_SIZE_SCALER {
+                return Err(Error::InvalidValue(
+                    "slice_size_scaler exceeds the implementation cap",
+                ));
+            }
         }
     }
 
     // quant_matrix() (§12.4.5.3).
     let quant_matrix =
         read_quant_matrix(r, wavelet_index, wavelet_index_ho, dwt_depth, dwt_depth_ho)?;
+
+    if r.overrun() {
+        return Err(Error::UnexpectedEof);
+    }
 
     Ok(TransformParameters {
         wavelet_index,
@@ -318,6 +403,11 @@ pub fn unpack_slice(
     sy: u64,
     kind: PictureKind,
 ) -> Result<()> {
+    // A slice starting past the end of the input means the picture was
+    // truncated — fail rather than unpack fabricated zero bits.
+    if r.overrun() {
+        return Err(Error::UnexpectedEof);
+    }
     match kind {
         PictureKind::LowDelay => ld_slice(r, tp, td, sx, sy),
         PictureKind::HighQuality => hq_slice(r, tp, td, sx, sy),
@@ -349,6 +439,11 @@ pub fn transform_data(
             unpack_slice(r, tp, &mut td, sx, sy, kind)?;
         }
     }
+    // Catch truncation inside the final slice (unpack_slice only checks at
+    // slice start). A complete picture ends at or before the input's end.
+    if r.overrun() {
+        return Err(Error::UnexpectedEof);
+    }
 
     if kind.uses_dc_prediction() {
         apply_dc_prediction(&mut td);
@@ -374,6 +469,14 @@ fn ld_slice(
     sy: u64,
 ) -> Result<()> {
     let slice_total_bits = 8 * slice_bytes(tp, sx, sy);
+    // Each LD slice must at least hold its own 7-bit qindex plus a
+    // non-empty luma-length field (§13.5.3.1); a smaller fixed size can
+    // only come from degenerate slice_bytes fractions.
+    if slice_total_bits < 8 {
+        return Err(Error::InvalidValue(
+            "low-delay slice smaller than its own header",
+        ));
+    }
     let qindex = r.read_nbits(7);
     let quant = slice_quantizers(qindex, tp);
 
@@ -478,6 +581,11 @@ fn unpack_color_diff_bands(
 }
 
 /// `dc_prediction()` (§13.4): in-place spatial prediction of the DC band.
+///
+/// Wrapping addition: the spec's integers are unbounded, and while every
+/// well-formed stream stays far inside `i64`, hostile coefficient runs can
+/// accumulate arbitrarily — wrap deterministically (the §15.5 clip bounds
+/// the final output) instead of aborting.
 fn dc_prediction(band: &mut Plane) {
     for y in 0..band.height {
         for x in 0..band.width {
@@ -494,7 +602,7 @@ fn dc_prediction(band: &mut Plane) {
                 0
             };
             let cur = band.get(y, x);
-            band.set(y, x, cur + prediction);
+            band.set(y, x, cur.wrapping_add(prediction));
         }
     }
 }
@@ -503,10 +611,11 @@ fn dc_prediction(band: &mut Plane) {
 ///
 /// Uses the spec's floor division (`//`, rounding toward −infinity per
 /// §5.6.4 NOTE 1), which differs from Rust's truncating `/` for negative
-/// numerators — `mean(-1,-2,-3)` must be −2, not −1.
+/// numerators — `mean(-1,-2,-3)` must be −2, not −1. The sum wraps for the
+/// same robustness reason as [`dc_prediction`].
 #[inline]
 fn mean3(a: i64, b: i64, c: i64) -> i64 {
-    floor_div(a + b + c + 1, 3)
+    floor_div(a.wrapping_add(b).wrapping_add(c).wrapping_add(1), 3)
 }
 
 /// Floor division `a // b` for `b > 0` (§5.6.4): rounds toward −infinity.

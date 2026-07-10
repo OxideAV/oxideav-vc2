@@ -50,12 +50,18 @@ pub fn parse_info(r: &mut BitReader) -> Result<ParseInfo> {
         r.read_uint_lit(1) as u8,
         r.read_uint_lit(1) as u8,
     ];
+    if r.overrun() {
+        return Err(Error::UnexpectedEof);
+    }
     if prefix != PARSE_INFO_PREFIX {
         return Err(Error::BadParseInfoPrefix(prefix));
     }
     let parse_code = r.read_uint_lit(1) as u8;
     let next_parse_offset = r.read_uint_lit(4) as u32;
     let previous_parse_offset = r.read_uint_lit(4) as u32;
+    if r.overrun() {
+        return Err(Error::UnexpectedEof);
+    }
     Ok(ParseInfo {
         parse_code,
         next_parse_offset,
@@ -136,6 +142,9 @@ pub fn fragment_header(r: &mut BitReader) -> Result<FragmentHeader> {
     } else {
         (0, 0)
     };
+    if r.overrun() {
+        return Err(Error::UnexpectedEof);
+    }
     Ok(FragmentHeader {
         picture_number,
         fragment_data_length,
@@ -173,6 +182,7 @@ struct FragmentState {
 pub struct SequenceDecoder {
     seq_header: Option<SequenceHeader>,
     fragment: Option<FragmentState>,
+    mid_sequence: bool,
 }
 
 impl SequenceDecoder {
@@ -188,10 +198,19 @@ impl SequenceDecoder {
         self.fragment.is_some()
     }
 
+    /// True after any data unit of a sequence has been walked and before
+    /// the matching end-of-sequence data unit. A well-formed stream is not
+    /// mid-sequence at its end (§10.4.1: each sequence starts and ends
+    /// with a parse-info header, the last being end-of-sequence).
+    pub fn mid_sequence(&self) -> bool {
+        self.mid_sequence
+    }
+
     /// Drop all per-sequence state (`reset_state`, §10.4.1).
     pub fn reset(&mut self) {
         self.seq_header = None;
         self.fragment = None;
+        self.mid_sequence = false;
     }
 
     /// Walk every data unit in `data`, returning the pictures completed
@@ -206,6 +225,7 @@ impl SequenceDecoder {
             // The offset of this parse-info header within the chunk, so that
             // we can honour next_parse_offset for skip-only data units.
             let header_pos = r.byte_pos().saturating_sub(13);
+            self.mid_sequence = true;
             match classify(pi.parse_code) {
                 DataUnit::EndOfSequence => {
                     // §14.1: a sequence shall not end mid-picture.
@@ -321,6 +341,10 @@ impl SequenceDecoder {
             transform::unpack_slice(r, &st.tp, &mut st.td, sx, sy, kind)?;
             st.slices_received += 1;
         }
+        // Catch truncation inside the fragment's final slice.
+        if r.overrun() {
+            return Err(Error::UnexpectedEof);
+        }
         if st.slices_received < total_slices {
             return Ok(None);
         }
@@ -356,6 +380,13 @@ pub fn parse_sequence(data: &[u8]) -> Result<Vec<DecodedPicture>> {
     if decoder.has_incomplete_picture() {
         return Err(Error::InvalidValue(
             "stream ended while a fragmented picture is incomplete",
+        ));
+    }
+    if decoder.mid_sequence() {
+        // §10.4.1: every sequence ends with an end-of-sequence data unit —
+        // its absence means the stream was truncated.
+        return Err(Error::InvalidValue(
+            "stream ended without an end-of-sequence data unit",
         ));
     }
     Ok(pictures)
