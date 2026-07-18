@@ -11,7 +11,8 @@
 mod common;
 
 use common::{
-    build_units, fragment_data_body, hq_slice_bytes, picture_body, sequence_header_body, PicParams,
+    build_units, fragment_data_body, hq_slice_bytes, picture_body, sequence_header_body,
+    sequence_header_body_full, PicParams, SignalRange,
 };
 
 /// Assemble a full sequence: PI(seq header) seq_header PI(HQ) picture PI(EOS).
@@ -143,6 +144,31 @@ fn asymmetric_depths_without_default_require_custom_matrix() {
         oxideav_vc2::decode_sequence(&stream),
         Err(oxideav_vc2::Error::MissingQuantMatrix)
     ));
+}
+
+#[test]
+fn standalone_16bit_full_range_decode() {
+    // Table 10 preset 8 through the standalone API: video depth 16 on
+    // both components, §15.5 clip range [-32768, 32767], offset +32768,
+    // so the unsigned output spans the whole 16-bit lattice. Large
+    // coefficients also force long interleaved exp-Golomb codes through
+    // the bounded-block reader.
+    let p = PicParams::hq_depth0();
+    let seq = sequence_header_body_full(2, 2, p.major_version, 0, SignalRange::Preset(8));
+    let y = [-32768i64, 32767, 12345, -12345];
+    let c1 = [0i64; 4];
+    let c2 = [21212i64, -21212, 1, -1];
+    let pic = picture_body(&p, 3, &[hq_slice_bytes(p.qindex, &y, &c1, &c2)]);
+    let stream = build_units(&[(0x00, seq), (0xE8, pic)]);
+    let pics = oxideav_vc2::decode_sequence(&stream).expect("decode");
+    assert_eq!(pics.len(), 1);
+    let pic = &pics[0];
+    assert_eq!(pic.luma_depth, 16);
+    assert_eq!(pic.color_diff_depth, 16);
+    let off = |v: i64| (v + 32768) as u16;
+    assert_eq!(pic.y, y.map(off).to_vec());
+    assert_eq!(pic.c1, vec![32768; 4]);
+    assert_eq!(pic.c2, c2.map(off).to_vec());
 }
 
 #[test]

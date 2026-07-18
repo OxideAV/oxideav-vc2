@@ -237,6 +237,101 @@ fn preset8_16bit_full_range_reaches_both_extremes() {
 }
 
 #[test]
+fn custom_13bit_range_promotes_by_shift_3() {
+    // Custom §11.4.9 range with excursion 8191: depth = intlog2(8192) =
+    // 13 on both components, so there is no exact planar format and the
+    // picture is promoted onto Yuv444P16Le. Every output word is the
+    // §15.5 code value (v + 4096) shifted left by 16 - 13 = 3 — the same
+    // ×2^k scaling Table 10 applies between its own presets.
+    let range = SignalRange::Custom {
+        luma_offset: 512,
+        luma_excursion: 8191,
+        color_diff_offset: 4096,
+        color_diff_excursion: 8191,
+    };
+    let y = [100i64, -100, 0, 4095]; // 4095 is the positive clip bound
+    let c = [7i64, -7, 4095, -4096];
+    let planes = decode_words(range, &y, &c, &c);
+    let promote = |v: i64| ((v + 4096) as u16) << 3;
+    assert_eq!(planes[0], y.map(promote).to_vec());
+    assert_eq!(planes[1], c.map(promote).to_vec());
+    // Extremes of the promoted lattice: 0 and (2^13 - 1) << 3 = 65528.
+    assert_eq!(planes[1][2], 65528);
+    assert_eq!(planes[1][3], 0);
+}
+
+#[test]
+fn mixed_deep_depths_promote_per_plane() {
+    // Luma excursion 65535 (depth 16) with chroma excursion 4095 (depth
+    // 12): the deeper component forces the 16-bit surface; luma words
+    // pass verbatim while chroma promotes by 16 - 12 = 4.
+    let range = SignalRange::Custom {
+        luma_offset: 0,
+        luma_excursion: 65535,
+        color_diff_offset: 2048,
+        color_diff_excursion: 4095,
+    };
+    let y = [-32768i64, 32767, 5, -5];
+    let c = [100i64, -100, 2047, -2048];
+    let planes = decode_words(range, &y, &c, &c);
+    assert_eq!(planes[0], y.map(|v| (v + 32768) as u16).to_vec());
+    assert_eq!(planes[1], c.map(|v| ((v + 2048) as u16) << 4).to_vec());
+    assert_eq!(planes[1][2], 65520); // (2^12 - 1) << 4
+}
+
+#[test]
+fn shallow_mixed_depths_stay_unsupported() {
+    // Luma 10-bit with chroma 8-bit: no exact format, and no component
+    // needs the 16-bit surface — the wrapper must refuse rather than
+    // silently promote into a deeper format's significant bits.
+    let range = SignalRange::Custom {
+        luma_offset: 0,
+        luma_excursion: 1023,
+        color_diff_offset: 128,
+        color_diff_excursion: 255,
+    };
+    let p = PicParams::hq_depth0();
+    let seq = sequence_header_body_full(2, 2, p.major_version, 0, range);
+    let c = [0i64; 4];
+    let pic = picture_body(&p, 1, &[hq_slice_bytes(p.qindex, &c, &c, &c)]);
+    let stream = build_units(&[(0x00, seq), (0xE8, pic)]);
+    let mut dec = oxideav_vc2::make_decoder(&vc2_params()).expect("factory");
+    assert!(matches!(
+        dec.send_packet(&packet(stream, 0)),
+        Err(Error::Unsupported(_))
+    ));
+}
+
+#[test]
+fn preset7_422_subsampling_maps_to_yuv422p16() {
+    // 2x2 luma with 4:2:2 sampling: 1x2 chroma planes on the 16-bit
+    // surface (Yuv422P16Le), stride 2 bytes per chroma row.
+    let p = PicParams::hq_depth0();
+    let seq = sequence_header_body_full(2, 2, p.major_version, 1, SignalRange::Preset(7));
+    let y = [10i64, -10, 20, -20];
+    let c1 = [300i64, -300];
+    let c2 = [1i64, -1];
+    let pic = picture_body(&p, 1, &[hq_slice_bytes(p.qindex, &y, &c1, &c2)]);
+    let stream = build_units(&[(0x00, seq), (0xE8, pic)]);
+    let mut dec = oxideav_vc2::make_decoder(&vc2_params()).expect("factory");
+    dec.send_packet(&packet(stream, 0)).unwrap();
+    let Frame::Video(v) = dec.receive_frame().expect("frame") else {
+        panic!("expected a video frame");
+    };
+    assert_eq!(v.planes[0].stride, 4);
+    assert_eq!(v.planes[1].stride, 2);
+    assert_eq!(v.planes[1].data.len(), 4); // 1x2 samples, 2 bytes each
+    let words = |p: &oxideav_core::VideoPlane| -> Vec<u16> {
+        p.data
+            .chunks_exact(2)
+            .map(|b| u16::from_le_bytes([b[0], b[1]]))
+            .collect()
+    };
+    assert_eq!(words(&v.planes[1]), vec![300 + 32768, 32768 - 300]);
+    assert_eq!(words(&v.planes[2]), vec![32769, 32767]);
+}
+
+#[test]
 fn extradata_sequence_header_primes_the_decoder() {
     // A container may stage the sequence header in extradata; the first
     // packet can then hold just the picture data unit.
