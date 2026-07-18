@@ -397,6 +397,89 @@ fn preset7_422_subsampling_maps_to_yuv422p16() {
 }
 
 #[test]
+fn depth_switch_across_sequences_repacks_frames() {
+    // A VC-2 stream may concatenate sequences (§10.3) with different
+    // video parameters. The surface mapping is chosen per picture, so
+    // an 8-bit sequence followed by a 16-bit one must yield a byte
+    // frame then a word frame from the same decoder instance.
+    let p = PicParams::hq_depth0();
+    let y8 = [10i64, -20, 30, -40];
+    let y16 = [-30000i64, 30000, 0, 1];
+    let c = [0i64; 4];
+    let mut stream = build_units(&[
+        (0x00, sequence_header_body(2, 2, p.major_version)),
+        (
+            0xE8,
+            picture_body(&p, 1, &[hq_slice_bytes(p.qindex, &y8, &c, &c)]),
+        ),
+    ]);
+    stream.extend_from_slice(&build_units(&[
+        (
+            0x00,
+            sequence_header_body_full(2, 2, p.major_version, 0, SignalRange::Preset(8)),
+        ),
+        (
+            0xE8,
+            picture_body(&p, 2, &[hq_slice_bytes(p.qindex, &y16, &c, &c)]),
+        ),
+    ]));
+
+    let mut dec = oxideav_vc2::make_decoder(&vc2_params()).expect("factory");
+    dec.send_packet(&packet(stream, 0)).unwrap();
+
+    let Frame::Video(first) = dec.receive_frame().expect("first frame") else {
+        panic!("expected a video frame");
+    };
+    assert_eq!(first.planes[0].stride, 2); // 8-bit: byte planes
+    let expect8: Vec<u8> = y8.iter().map(|&v| (v + 128) as u8).collect();
+    assert_eq!(first.planes[0].data, expect8);
+
+    let Frame::Video(second) = dec.receive_frame().expect("second frame") else {
+        panic!("expected a video frame");
+    };
+    assert_eq!(second.planes[0].stride, 4); // 16-bit: LE word planes
+    let words: Vec<u16> = second.planes[0]
+        .data
+        .chunks_exact(2)
+        .map(|b| u16::from_le_bytes([b[0], b[1]]))
+        .collect();
+    assert_eq!(words, y16.map(|v| (v + 32768) as u16).to_vec());
+}
+
+#[test]
+fn extradata_16bit_sequence_header_primes_the_decoder() {
+    // A container may stage the 16-bit sequence header out of band; the
+    // first packet then carries only the picture data unit and the
+    // frame must come out as P16Le words.
+    let p = PicParams::hq_depth0();
+    let seq = sequence_header_body_full(2, 2, p.major_version, 0, SignalRange::Preset(7));
+    let mut extradata = Vec::new();
+    parse_info(&mut extradata, 0x00, (13 + seq.len()) as u32, 0);
+    extradata.extend_from_slice(&seq);
+
+    let mut params = vc2_params();
+    params.extradata = extradata;
+    let mut dec = oxideav_vc2::make_decoder(&params).expect("factory");
+
+    let y = [4096i64, -4096, 0, 27392];
+    let c = [0i64; 4];
+    let pic = picture_body(&p, 1, &[hq_slice_bytes(p.qindex, &y, &c, &c)]);
+    let mut pkt = Vec::new();
+    parse_info(&mut pkt, 0xE8, (13 + pic.len()) as u32, 0);
+    pkt.extend_from_slice(&pic);
+    dec.send_packet(&packet(pkt, 0)).unwrap();
+    let Frame::Video(v) = dec.receive_frame().expect("frame") else {
+        panic!("expected a video frame");
+    };
+    let words: Vec<u16> = v.planes[0]
+        .data
+        .chunks_exact(2)
+        .map(|b| u16::from_le_bytes([b[0], b[1]]))
+        .collect();
+    assert_eq!(words, y.map(|v| (v + 32768) as u16).to_vec());
+}
+
+#[test]
 fn extradata_sequence_header_primes_the_decoder() {
     // A container may stage the sequence header in extradata; the first
     // packet can then hold just the picture data unit.
