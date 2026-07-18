@@ -345,6 +345,35 @@ fn mixed_deep_depths_promote_per_plane() {
 }
 
 #[test]
+fn depth_derivation_boundary_15_vs_16() {
+    // §11.6.3 depth = intlog2(excursion + 1): excursion 32767 is the
+    // deepest 15-bit range (promotion shift 1), excursion 32768 already
+    // derives depth 16 (verbatim words). Pins the intlog2 boundary on
+    // the promotion path.
+    let mk = |excursion: u64, offset: u64| SignalRange::Custom {
+        luma_offset: offset,
+        luma_excursion: excursion,
+        color_diff_offset: offset,
+        color_diff_excursion: excursion,
+    };
+    let y = [100i64, -100, 16383, -16384]; // 15-bit clip extremes last
+    let c = [0i64; 4];
+    let planes = decode_words(mk(32767, 16384), &y, &c, &c);
+    assert_eq!(
+        planes[0],
+        y.map(|v| ((v + 16384) as u16) << 1).to_vec(),
+        "depth 15 must promote by << 1"
+    );
+    assert_eq!(planes[0][2], 65534); // (2^15 - 1) << 1
+    let planes = decode_words(mk(32768, 16384), &y, &c, &c);
+    assert_eq!(
+        planes[0],
+        y.map(|v| (v + 32768) as u16).to_vec(),
+        "depth 16 must pass words verbatim"
+    );
+}
+
+#[test]
 fn shallow_mixed_depths_stay_unsupported() {
     // Luma 10-bit with chroma 8-bit: no exact format, and no component
     // needs the 16-bit surface — the wrapper must refuse rather than
