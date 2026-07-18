@@ -138,6 +138,71 @@ fn fragmented_picture_spans_packets() {
 }
 
 #[test]
+fn fragmented_16bit_picture_spans_packets() {
+    // One data unit per packet at video depth 16 (Table 10 preset 8):
+    // the P16Le frame appears only once the last fragment arrives, with
+    // verbatim word packing across the reassembled slices.
+    let p = PicParams {
+        major_version: 3,
+        slices_x: 2,
+        slices_y: 2,
+        ..PicParams::hq_depth0()
+    };
+    let c = [0i64; 4];
+    let values: [i64; 4] = [-30000, 30000, -1, 1];
+    let slices: Vec<Vec<u8>> = values
+        .iter()
+        .map(|&v| hq_slice_bytes(p.qindex, &[v; 4], &c, &c))
+        .collect();
+
+    let unit = |code: u8, body: Vec<u8>| -> Vec<u8> {
+        let mut out = Vec::new();
+        parse_info(&mut out, code, (13 + body.len()) as u32, 0);
+        out.extend_from_slice(&body);
+        out
+    };
+
+    let mut dec = oxideav_vc2::make_decoder(&vc2_params()).expect("factory");
+    let seq = sequence_header_body_full(4, 4, p.major_version, 0, SignalRange::Preset(8));
+    dec.send_packet(&packet(unit(0x00, seq), 1)).unwrap();
+    dec.send_packet(&packet(unit(0xEC, fragment_setup_body(&p, 9)), 2))
+        .unwrap();
+    dec.send_packet(&packet(
+        unit(0xEC, fragment_data_body(9, 0, 0, &slices[0..2])),
+        3,
+    ))
+    .unwrap();
+    assert!(matches!(dec.receive_frame(), Err(Error::NeedMore)));
+    dec.send_packet(&packet(
+        unit(0xEC, fragment_data_body(9, 0, 1, &slices[2..4])),
+        4,
+    ))
+    .unwrap();
+    let Frame::Video(v) = dec.receive_frame().expect("frame") else {
+        panic!("expected a video frame");
+    };
+    assert_eq!(v.planes[0].stride, 8); // 4 samples/row * 2 bytes
+    let words: Vec<u16> = v.planes[0]
+        .data
+        .chunks_exact(2)
+        .map(|b| u16::from_le_bytes([b[0], b[1]]))
+        .collect();
+    let q = values.map(|v| (v + 32768) as u16);
+    #[rustfmt::skip]
+    let expect = vec![
+        q[0], q[0], q[1], q[1],
+        q[0], q[0], q[1], q[1],
+        q[2], q[2], q[3], q[3],
+        q[2], q[2], q[3], q[3],
+    ];
+    assert_eq!(words, expect);
+    assert!(v.planes[1]
+        .data
+        .chunks_exact(2)
+        .all(|b| u16::from_le_bytes([b[0], b[1]]) == 32768));
+}
+
+#[test]
 fn flush_mid_fragmented_picture_errors() {
     let p = PicParams {
         major_version: 3,

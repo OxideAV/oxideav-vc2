@@ -13,7 +13,7 @@ mod common;
 
 use common::{
     build_units, fragment_data_body, fragment_setup_body, hq_slice_bytes, ld_slice_bytes,
-    picture_body, sequence_header_body, PicParams,
+    picture_body, sequence_header_body, sequence_header_body_full, PicParams, SignalRange,
 };
 use oxideav_vc2::{decode_sequence, DecodedPicture, Error, SequenceDecoder};
 
@@ -100,6 +100,103 @@ fn hq_fragmented_one_slice_per_fragment() {
     let pics = decode_sequence(&stream).expect("decode");
     assert_eq!(pics.len(), 1);
     assert_pic(&pics[0], 3, &expect);
+}
+
+#[test]
+fn hq_fragmented_16bit_matches_unfragmented() {
+    // The quadrant equality check at video depth 16 (Table 10 preset 8):
+    // reassembly and the deferred finalization must behave identically
+    // when code values span the full bi-polar range and the exp-Golomb
+    // codes run long.
+    let p = PicParams {
+        major_version: 3,
+        slices_x: 2,
+        slices_y: 2,
+        ..PicParams::hq_depth0()
+    };
+    let luma: Vec<i64> = (1..=16).map(|v| v * 4000 - 34000).collect(); // -30000..=30000
+    let quadrant = |sx: usize, sy: usize| -> Vec<i64> {
+        let mut v = Vec::new();
+        for row in 2 * sy..2 * sy + 2 {
+            for col in 2 * sx..2 * sx + 2 {
+                v.push(luma[row * 4 + col]);
+            }
+        }
+        v
+    };
+    let c = [0i64; 4];
+    let mut slices = Vec::new();
+    for sy in 0..2 {
+        for sx in 0..2 {
+            slices.push(hq_slice_bytes(p.qindex, &quadrant(sx, sy), &c, &c));
+        }
+    }
+    let seq = sequence_header_body_full(4, 4, p.major_version, 0, SignalRange::Preset(8));
+
+    let plain = build_units(&[(0x00, seq.clone()), (0xE8, picture_body(&p, 7, &slices))]);
+    let plain_pics = decode_sequence(&plain).expect("plain decode");
+    assert_eq!(plain_pics.len(), 1);
+    let expect: Vec<u16> = luma.iter().map(|&v| (v + 32768) as u16).collect();
+    assert_eq!(plain_pics[0].y, expect);
+    assert!(plain_pics[0].c1.iter().all(|&v| v == 32768));
+
+    let fragmented = build_units(&[
+        (0x00, seq),
+        (0xEC, fragment_setup_body(&p, 7)),
+        (0xEC, fragment_data_body(7, 0, 0, &slices[0..2])),
+        (0xEC, fragment_data_body(7, 0, 1, &slices[2..4])),
+    ]);
+    let frag_pics = decode_sequence(&fragmented).expect("fragmented decode");
+    assert_eq!(frag_pics.len(), 1);
+    assert_eq!(frag_pics[0].y, plain_pics[0].y);
+    assert_eq!(frag_pics[0].c1, plain_pics[0].c1);
+    assert_eq!(frag_pics[0].c2, plain_pics[0].c2);
+}
+
+#[test]
+fn ld_16bit_slices_decode_with_dc_prediction() {
+    // Low-delay at video depth 16 (Table 10 preset 7): large residuals
+    // force long codes inside the fixed-size slices, and dc_prediction
+    // must still run once over the level-0 band. 24-byte slices leave
+    // room for four ~32-bit luma codes plus the chroma pairs.
+    let p = PicParams {
+        major_version: 3,
+        slices_x: 2,
+        slices_y: 1,
+        low_delay: true,
+        slice_bytes_numerator: 24,
+        slice_bytes_denominator: 1,
+        ..PicParams::hq_depth0()
+    };
+    let c = [0i64; 4];
+    let left = [1000i64, 500, -200, 40];
+    let right = [20000i64, -25000, 3, -3];
+    let slices = vec![
+        ld_slice_bytes(p.qindex, p.ld_slice_bytes_len(0), &left, &c, &c),
+        ld_slice_bytes(p.qindex, p.ld_slice_bytes_len(1), &right, &c, &c),
+    ];
+    let seq = sequence_header_body_full(4, 2, p.major_version, 0, SignalRange::Preset(7));
+
+    let plain = build_units(&[(0x00, seq.clone()), (0xC8, picture_body(&p, 5, &slices))]);
+    let plain_pics = decode_sequence(&plain).expect("plain LD decode");
+    assert_eq!(plain_pics.len(), 1);
+    assert_eq!(plain_pics[0].luma_depth, 16);
+    // dc_prediction corner spot-checks at the 16-bit offset (+32768):
+    // (0,0) has no neighbours; (0,1) predicts from its left.
+    assert_eq!(plain_pics[0].y[0], 32768 + 1000);
+    assert_eq!(plain_pics[0].y[1], 32768 + 1000 + 500);
+
+    let fragmented = build_units(&[
+        (0x00, seq),
+        (0xCC, fragment_setup_body(&p, 5)),
+        (0xCC, fragment_data_body(5, 0, 0, &slices[0..1])),
+        (0xCC, fragment_data_body(5, 1, 0, &slices[1..2])),
+    ]);
+    let frag_pics = decode_sequence(&fragmented).expect("fragmented LD decode");
+    assert_eq!(frag_pics.len(), 1);
+    assert_eq!(frag_pics[0].y, plain_pics[0].y);
+    assert_eq!(frag_pics[0].c1, plain_pics[0].c1);
+    assert_eq!(frag_pics[0].c2, plain_pics[0].c2);
 }
 
 #[test]
