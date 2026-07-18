@@ -5,8 +5,8 @@
 mod common;
 
 use common::{
-    build_units, hq_slice_bytes, parse_info, picture_body, sequence_header_body, BitWriter,
-    PicParams,
+    build_units, hq_slice_bytes, parse_info, picture_body, sequence_header_body,
+    sequence_header_body_full, PicParams, SignalRange,
 };
 use oxideav_vc2::{decode_sequence, Error};
 
@@ -122,38 +122,101 @@ fn huge_slice_count_is_rejected() {
     ));
 }
 
+/// A sequence-header-only stream with the given custom signal range.
+fn custom_range_stream(lo: u64, le: u64, co: u64, ce: u64) -> Vec<u8> {
+    let range = SignalRange::Custom {
+        luma_offset: lo,
+        luma_excursion: le,
+        color_diff_offset: co,
+        color_diff_excursion: ce,
+    };
+    build_units(&[(0x00, sequence_header_body_full(2, 2, 2, 0, range))])
+}
+
 #[test]
 fn oversized_excursion_is_rejected() {
     // Custom signal range with a 2^40 excursion: unrepresentable in the
     // 16-bit output planes and previously able to overflow the depth math.
-    let mut w = BitWriter::default();
-    w.put_uint(2); // major
-    w.put_uint(0);
-    w.put_uint(0);
-    w.put_uint(0);
-    w.put_uint(0); // custom base format
-    w.put_bool(true); // frame_size
-    w.put_uint(2);
-    w.put_uint(2);
-    w.put_bool(true); // color_diff: 4:4:4
-    w.put_uint(0);
-    w.put_bool(false); // scan_format
-    w.put_bool(false); // frame_rate
-    w.put_bool(false); // pixel_aspect_ratio
-    w.put_bool(false); // clean_area
-    w.put_bool(true); // signal_range: custom values (index 0)
-    w.put_uint(0);
-    w.put_uint(0); // luma_offset
-    w.put_uint(1 << 40); // luma_excursion
-    w.put_uint(0); // color_diff_offset
-    w.put_uint(255); // color_diff_excursion
-    w.put_bool(false); // color_spec
-    w.put_uint(0); // picture_coding_mode
-    let stream = build_units(&[(0x00, w.into_bytes())]);
     assert!(matches!(
-        decode_sequence(&stream),
+        decode_sequence(&custom_range_stream(0, 1 << 40, 0, 255)),
         Err(Error::InvalidValue(_))
     ));
+    // The bound is exact: 65535 is the deepest representable excursion,
+    // 65536 the first rejected one.
+    assert!(decode_sequence(&custom_range_stream(0, 65535, 0, 65535)).is_ok());
+    assert!(matches!(
+        decode_sequence(&custom_range_stream(0, 65535, 0, 65536)),
+        Err(Error::InvalidValue(_))
+    ));
+}
+
+#[test]
+fn oversized_offset_is_rejected() {
+    // Signal offsets are code values in the (at most 16-bit) output
+    // range; a 2^40 offset cannot denote any representable level and
+    // must be rejected, not carried as meaningless metadata.
+    assert!(matches!(
+        decode_sequence(&custom_range_stream(1 << 40, 255, 128, 255)),
+        Err(Error::InvalidValue(_))
+    ));
+    assert!(matches!(
+        decode_sequence(&custom_range_stream(0, 255, 1 << 40, 255)),
+        Err(Error::InvalidValue(_))
+    ));
+    // Boundary: 65535 is representable, 65536 is not.
+    assert!(decode_sequence(&custom_range_stream(65535, 65535, 65535, 65535)).is_ok());
+    assert!(matches!(
+        decode_sequence(&custom_range_stream(65536, 65535, 0, 65535)),
+        Err(Error::InvalidValue(_))
+    ));
+}
+
+/// A well-formed single-picture 16-bit (Table 10 preset 7) stream.
+fn good_16bit_stream() -> Vec<u8> {
+    let p = PicParams::hq_depth0();
+    let seq = sequence_header_body_full(2, 2, p.major_version, 0, SignalRange::Preset(7));
+    let y = [1000i64, -1000, 27392, -27392];
+    let c = [24576i64, -24576, 1, -1];
+    let pic = picture_body(&p, 7, &[hq_slice_bytes(p.qindex, &y, &c, &c)]);
+    build_units(&[(0x00, seq), (0xE8, pic)])
+}
+
+#[test]
+fn every_truncation_point_errors_cleanly_16bit() {
+    // The truncation sweep repeated on a 16-bit stream: the deep-output
+    // path must keep the same EOF discipline as the 8-bit one.
+    let stream = good_16bit_stream();
+    assert!(decode_sequence(&stream).is_ok());
+    for len in 0..stream.len() {
+        assert!(
+            decode_sequence(&stream[..len]).is_err(),
+            "truncation at {len} of {} unexpectedly decoded",
+            stream.len()
+        );
+    }
+}
+
+#[test]
+fn single_bit_corruption_of_16bit_stream_never_panics() {
+    // Flip every bit of a valid 16-bit stream, one at a time. Corrupted
+    // streams may decode (to different pixels) or error — either way the
+    // decoder must return promptly with some Result, never panic, hang
+    // or blow allocations (the header caps bound whatever the flipped
+    // fields claim).
+    let stream = good_16bit_stream();
+    for byte in 0..stream.len() {
+        // Under Miri (the org CI runs the suite through it) flip one
+        // rotating bit per byte to keep interpreter time bounded;
+        // natively flip all eight.
+        let all = [0u8, 1, 2, 3, 4, 5, 6, 7];
+        let one = [(byte % 8) as u8];
+        let bits: &[u8] = if cfg!(miri) { &one } else { &all };
+        for &bit in bits {
+            let mut corrupt = stream.clone();
+            corrupt[byte] ^= 1 << bit;
+            let _ = decode_sequence(&corrupt);
+        }
+    }
 }
 
 #[test]

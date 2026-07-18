@@ -20,6 +20,11 @@ on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   pictures where the deeper component needs more than 12 bits ride the
   same surface with per-plane shifts; mismatched pairs at or below 12
   bits remain unsupported rather than being silently promoted.
+  Hardening keeps pace with the new paths: custom §11.4.9 signal
+  *offsets* are now bounded to the representable 0..=65535 code space
+  (documented implementation cap alongside the existing excursion
+  bound), and the truncation sweep plus a new every-bit-flip corruption
+  sweep also run over a 16-bit stream.
 
 - **Hostile-stream hardening.** Truncated, malformed and adversarial
   inputs now produce prompt, deterministic errors instead of hangs,

@@ -339,6 +339,18 @@ pub fn sequence_header(r: &mut BitReader) -> Result<SequenceHeader> {
             "signal excursion outside the representable 1..=65535 range",
         ));
     }
+    // Signal offsets are code values inside the output range (§11.4.9's
+    // presets place them within 0..2^depth - 1); an offset beyond the
+    // 16-bit lattice cannot denote any representable level, so custom
+    // (index 0) values above it are rejected as hostile rather than
+    // carried around as meaningless metadata.
+    if video_parameters.luma_offset > u16::MAX as u64
+        || video_parameters.color_diff_offset > u16::MAX as u64
+    {
+        return Err(Error::InvalidValue(
+            "signal offset outside the representable 0..=65535 range",
+        ));
+    }
     let coding_parameters = set_coding_parameters(&video_parameters, picture_coding_mode);
     Ok(SequenceHeader {
         parse_parameters,
