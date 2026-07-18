@@ -26,6 +26,20 @@ on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   bound), and the truncation sweep plus a new every-bit-flip corruption
   sweep also run over a 16-bit stream.
 
+- **Fixture-pinned conformance matrix.** Seven hand-assembled
+  single-picture HQ fixtures (staged with generation notes under
+  `docs/video/vc2/fixtures/`) are committed as test vectors with their
+  exact decoded planes pinned: 10/12-bit video-range streams across
+  4:4:4 / 4:2:2 / 4:2:0 and Haar / LeGall / Deslauriers-Dubuc (9,7) at
+  depths 1–2 — all five verified **bit-exact** against an independent
+  black-box validator binary (opaque CLI only) — plus the two 16-bit
+  presets (7/8), which every probed validator refuses at the sequence
+  header (its envelope excludes signal-range indices 5..=8), pinned as
+  self-consistent references on the externally corroborated code path.
+  Tests also prove the committed fixture bytes remain reproducible
+  from the spec-pseudocode harness, and that the 16-bit fixtures reach
+  a `Decoder` frame word-for-word.
+
 - **Hostile-stream hardening.** Truncated, malformed and adversarial
   inputs now produce prompt, deterministic errors instead of hangs,
   panics or unbounded allocations:
