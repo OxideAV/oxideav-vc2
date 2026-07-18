@@ -9,7 +9,7 @@ mod common;
 
 use common::{
     build_units, fragment_data_body, fragment_setup_body, hq_slice_bytes, parse_info, picture_body,
-    sequence_header_body, BitWriter, PicParams,
+    sequence_header_body, sequence_header_body_full, PicParams, SignalRange,
 };
 use oxideav_core::{CodecId, CodecParameters, Error, Frame, Packet, RuntimeContext, TimeBase};
 
@@ -163,63 +163,77 @@ fn flush_mid_fragmented_picture_errors() {
     assert!(dec.receive_frame().is_ok());
 }
 
-#[test]
-fn ten_bit_stream_packs_little_endian_words() {
-    // Same 2x2 picture but with signal-range preset 3 (10-bit video
-    // levels): depth = intlog2(877) = 10, so planes are 16-bit LE words
-    // and the offset is +512.
-    let mut w = BitWriter::default();
-    // parse_parameters: major=2, minor=0, profile=0, level=0.
-    w.put_uint(2);
-    w.put_uint(0);
-    w.put_uint(0);
-    w.put_uint(0);
-    // base_video_format = 0 (custom), explicit 2x2 frame size, 4:4:4.
-    w.put_uint(0);
-    w.put_bool(true);
-    w.put_uint(2);
-    w.put_uint(2);
-    w.put_bool(true);
-    w.put_uint(0);
-    // scan_format / frame_rate / pixel_aspect_ratio / clean_area: defaults.
-    w.put_bool(false);
-    w.put_bool(false);
-    w.put_bool(false);
-    w.put_bool(false);
-    // signal_range: preset index 3 (10-bit video range).
-    w.put_bool(true);
-    w.put_uint(3);
-    // color_spec: default; picture_coding_mode = 0.
-    w.put_bool(false);
-    w.put_uint(0);
-    let seq = w.into_bytes();
-
+/// Decode a single-picture 2x2 4:4:4 HQ depth-0 stream with the given
+/// signal range and return the three planes as LE 16-bit words.
+fn decode_words(range: SignalRange, y: &[i64; 4], c1: &[i64; 4], c2: &[i64; 4]) -> Vec<Vec<u16>> {
     let p = PicParams::hq_depth0();
-    let y = [100i64, -100, 0, 511];
-    let c = [0i64; 4];
-    let pic = picture_body(&p, 1, &[hq_slice_bytes(p.qindex, &y, &c, &c)]);
+    let seq = sequence_header_body_full(2, 2, p.major_version, 0, range);
+    let pic = picture_body(&p, 1, &[hq_slice_bytes(p.qindex, y, c1, c2)]);
     let stream = build_units(&[(0x00, seq), (0xE8, pic)]);
-
     let mut dec = oxideav_vc2::make_decoder(&vc2_params()).expect("factory");
     dec.send_packet(&packet(stream, 0)).unwrap();
     let Frame::Video(v) = dec.receive_frame().expect("frame") else {
         panic!("expected a video frame");
     };
-    assert_eq!(v.planes[0].stride, 4); // 2 samples/row * 2 bytes
-    let words: Vec<u16> = v.planes[0]
-        .data
-        .chunks_exact(2)
-        .map(|b| u16::from_le_bytes([b[0], b[1]]))
-        .collect();
+    assert_eq!(v.planes.len(), 3);
+    v.planes
+        .iter()
+        .map(|p| {
+            assert_eq!(p.stride, 4); // 2 samples/row * 2 bytes
+            p.data
+                .chunks_exact(2)
+                .map(|b| u16::from_le_bytes([b[0], b[1]]))
+                .collect()
+        })
+        .collect()
+}
+
+#[test]
+fn ten_bit_stream_packs_little_endian_words() {
+    // Same 2x2 picture but with signal-range preset 3 (10-bit video
+    // levels): depth = intlog2(877) = 10, so planes are 16-bit LE words
+    // and the offset is +512.
+    let y = [100i64, -100, 0, 511];
+    let c = [0i64; 4];
+    let planes = decode_words(SignalRange::Preset(3), &y, &c, &c);
     let expect: Vec<u16> = y.iter().map(|&s| (s + 512) as u16).collect();
-    assert_eq!(words, expect);
+    assert_eq!(planes[0], expect);
     // Chroma: 0 + 512 offset in 16-bit LE words.
-    let cwords: Vec<u16> = v.planes[1]
-        .data
-        .chunks_exact(2)
-        .map(|b| u16::from_le_bytes([b[0], b[1]]))
-        .collect();
-    assert!(cwords.iter().all(|&w| w == 512));
+    assert!(planes[1].iter().all(|&w| w == 512));
+    assert!(planes[2].iter().all(|&w| w == 512));
+}
+
+#[test]
+fn preset7_16bit_video_stream_decodes_verbatim_words() {
+    // Table 10 preset 7 (16-bit video levels): luma excursion 56064 and
+    // chroma excursion 57344 both derive video depth intlog2(·+1) = 16,
+    // so the picture rides Yuv444P16Le with no promotion shift and the
+    // §15.5 offset is +32768 on every component.
+    let y = [1000i64, -1000, 0, 27392]; // 27392 + 32768 = 4096 + 56064
+    let c1 = [-32768i64, 32767, 0, 1]; // clip-range extremes survive
+    let c2 = [24576i64, -24576, 0, -1];
+    let planes = decode_words(SignalRange::Preset(7), &y, &c1, &c2);
+    let off = |v: i64| (v + 32768) as u16;
+    assert_eq!(planes[0], y.map(off).to_vec());
+    assert_eq!(planes[1], c1.map(off).to_vec());
+    assert_eq!(planes[2], c2.map(off).to_vec());
+    // The signalled nominal white (offset 4096 + excursion 56064) is a
+    // representable output word untouched by any scaling.
+    assert_eq!(planes[0][3], 60160);
+}
+
+#[test]
+fn preset8_16bit_full_range_reaches_both_extremes() {
+    // Table 10 preset 8 (16-bit full range): depth 16, offset +32768.
+    // The clip range is [-32768, 32767], so the decoded words span the
+    // whole 16-bit lattice — 0 and 65535 are both reachable, which is
+    // exactly the "all 16 bits significant" contract of the P16Le
+    // formats.
+    let y = [-32768i64, 32767, -40000, 40000]; // last two clip at §15.5
+    let c = [0i64; 4];
+    let planes = decode_words(SignalRange::Preset(8), &y, &c, &c);
+    assert_eq!(planes[0], vec![0, 65535, 0, 65535]);
+    assert!(planes[1].iter().all(|&w| w == 32768));
 }
 
 #[test]

@@ -109,12 +109,34 @@ pub fn build_units(units: &[(u8, Vec<u8>)]) -> Vec<u8> {
     out
 }
 
-/// Build a sequence-header data-unit body (§11.1) for the custom base format
-/// with explicit small frame size, 4:4:4, progressive, 8-bit full-range
-/// signal. Major version 2 suffices for HQ pictures; version 3 unlocks the
-/// §12.4.4 extended (asymmetric) transform parameters and fragments.
-/// Returns the body bytes.
-pub fn sequence_header_body(width: u64, height: u64, major_version: u64) -> Vec<u8> {
+/// Signal-range choice for [`sequence_header_body_full`]: a Table 10
+/// preset index or fully custom §11.4.9 (index 0) values.
+#[derive(Clone, Copy)]
+pub enum SignalRange {
+    /// `signal_range()` with a preset index (Table 10, 1..=8).
+    Preset(u64),
+    /// `signal_range()` with index 0 and explicit values.
+    Custom {
+        luma_offset: u64,
+        luma_excursion: u64,
+        color_diff_offset: u64,
+        color_diff_excursion: u64,
+    },
+}
+
+/// Build a sequence-header data-unit body (§11.1) for the custom base
+/// format with explicit frame size, progressive scan and the given
+/// colour-difference sampling (Table 7 index) and signal range. Major
+/// version 2 suffices for HQ pictures; version 3 unlocks the §12.4.4
+/// extended (asymmetric) transform parameters and fragments. Returns
+/// the body bytes.
+pub fn sequence_header_body_full(
+    width: u64,
+    height: u64,
+    major_version: u64,
+    color_diff_index: u64,
+    range: SignalRange,
+) -> Vec<u8> {
     let mut w = BitWriter::default();
     // parse_parameters: major, minor=0, profile=0, level=0.
     w.put_uint(major_version);
@@ -128,9 +150,9 @@ pub fn sequence_header_body(width: u64, height: u64, major_version: u64) -> Vec<
     w.put_bool(true);
     w.put_uint(width);
     w.put_uint(height);
-    // color_diff_sampling_format: custom true, index 0 (4:4:4).
+    // color_diff_sampling_format: custom true, Table 7 index.
     w.put_bool(true);
-    w.put_uint(0);
+    w.put_uint(color_diff_index);
     // scan_format: custom false (progressive default).
     w.put_bool(false);
     // frame_rate: custom false.
@@ -139,14 +161,35 @@ pub fn sequence_header_body(width: u64, height: u64, major_version: u64) -> Vec<
     w.put_bool(false);
     // clean_area: custom false.
     w.put_bool(false);
-    // signal_range: custom true, preset index 1 (8-bit full range).
+    // signal_range: custom true, then the preset index or index 0 plus
+    // the four explicit values (§11.4.9).
     w.put_bool(true);
-    w.put_uint(1);
+    match range {
+        SignalRange::Preset(index) => w.put_uint(index),
+        SignalRange::Custom {
+            luma_offset,
+            luma_excursion,
+            color_diff_offset,
+            color_diff_excursion,
+        } => {
+            w.put_uint(0);
+            w.put_uint(luma_offset);
+            w.put_uint(luma_excursion);
+            w.put_uint(color_diff_offset);
+            w.put_uint(color_diff_excursion);
+        }
+    }
     // color_spec: custom false.
     w.put_bool(false);
     // picture_coding_mode = 0 (frames).
     w.put_uint(0);
     w.into_bytes()
+}
+
+/// [`sequence_header_body_full`] at 4:4:4 with the 8-bit full-range
+/// preset — the bootstrap-round defaults.
+pub fn sequence_header_body(width: u64, height: u64, major_version: u64) -> Vec<u8> {
+    sequence_header_body_full(width, height, major_version, 0, SignalRange::Preset(1))
 }
 
 /// Transform / slice parameter knobs for the picture and fragment builders.
