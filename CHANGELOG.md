@@ -7,6 +7,20 @@ on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **16-bit output through the registered `Decoder`.** Pictures whose
+  video depth exceeds 12 bits — the Table 10 preset-7/8 (16-bit) signal
+  ranges and custom §11.4.9 ranges with excursions above 4095 — now map
+  onto the new `oxideav-core` 0.1.30 `Yuv420P16Le` / `Yuv422P16Le` /
+  `Yuv444P16Le` formats instead of being reported unsupported. Depth-16
+  code values pass through verbatim (their code space already is the
+  16-bit surface); 13–15-bit components are promoted by a `16 - depth`
+  left shift per plane, the same power-of-two scaling Table 10 uses
+  between its own narrow-range presets, so signalled offset/excursion
+  levels scale consistently onto the full-width words. Mixed-depth
+  pictures where the deeper component needs more than 12 bits ride the
+  same surface with per-plane shifts; mismatched pairs at or below 12
+  bits remain unsupported rather than being silently promoted.
+
 - **Hostile-stream hardening.** Truncated, malformed and adversarial
   inputs now produce prompt, deterministic errors instead of hangs,
   panics or unbounded allocations:

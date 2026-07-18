@@ -32,16 +32,16 @@ end-to-end on hand-assembled VC-2 streams.
 | Picture fragments (setup/data, reassembly, constraints) | §14 | ✅ raster-order slice reassembly, deferred DC prediction, §14.1/§14.2 violations rejected; chunk-fed via `SequenceDecoder::push` |
 | IDWT lifting filters (all 7 wavelets) | §15.4.4 / Tables 16–22 | ✅ reversibility-tested (LeGall) |
 | Component IDWT + pad removal + clip + offset | §15 | ✅ |
-| `oxideav-core` `Decoder` (registry + direct factory) | — | ✅ `register(ctx)` + `make_decoder`; 8/10/12-bit planar YUV output; fragments may span packets |
+| `oxideav-core` `Decoder` (registry + direct factory) | — | ✅ `register(ctx)` + `make_decoder`; 8/10/12/16-bit planar YUV output (Table 10 presets 7/8 and >12-bit custom ranges ride the full-width 16-bit formats); fragments may span packets |
 | Hostile-input hardening | — | ✅ truncation → `UnexpectedEof` at every cut point; saturating VLC/quant math; documented caps on depth / area / slice counts; garbage fuzz-lite in CI |
 
 ### Not yet implemented
 
-- 16-bit output presets (signal-range indices 7/8) have no matching
-  `oxideav-core` planar pixel format yet; the standalone API decodes them,
-  the `Decoder` wrapper reports them unsupported.
 - No container tags are claimed yet (FourCC / Matroska mapping for VC-2 in
   containers is deliberately left to a coordinated fleet decision).
+- Mixed luma/chroma bit depths at or below 12 bits (custom signal ranges
+  only) have no exact planar format and are reported unsupported by the
+  `Decoder` wrapper; the standalone API decodes them.
 
 ## Usage (standalone)
 
