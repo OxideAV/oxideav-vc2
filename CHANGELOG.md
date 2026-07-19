@@ -5,6 +5,29 @@ on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.0.2](https://github.com/OxideAV/oxideav-vc2/compare/v0.0.1...v0.0.2) - 2026-07-19
+
+### Other
+
+- vc2 docs: surface the r418 decoder contract - output surfaces, tag claim, side-channel
+- vc2 tests: low-delay mixed-depth picture through the Decoder wrapper
+- vc2 tests: mixed-depth hostile-input sweeps - truncation, bit-flip, and wrapper-level frame well-formedness
+- vc2 tests: pin a mixed 12/10 custom-range conformance fixture - eighth matrix case
+- declare the spec-grounded container tag - FourCC BBCD with a parse-info confidence probe
+- represent mixed and off-format <=12-bit depths via the per-plane significant-bits side-channel
+- vc2 tests: pin the section 11.6.3 depth boundary at excursion 32767/32768
+- vc2 tests: per-picture surface re-selection - depth switch across sequences + 16-bit extradata priming
+- fixture-pinned conformance matrix - five externally corroborated 10/12-bit cases + 16-bit references
+- vc2 tests: 16-bit through fragments and low-delay slices
+- bound custom signal offsets to the 16-bit code space + 16-bit hardening sweeps
+- vc2 tests: custom >12-bit ranges - promotion shifts, mixed depths, 4:2:2 16-bit geometry, standalone path
+- vc2 tests: signal-range knob in the stream builder + preset 7/8 end-to-end decodes
+- 16-bit output surfaces - Table 10 presets 7/8 and >12-bit custom ranges through the core P16Le formats
+- hostile-stream hardening - no hangs, panics or unbounded allocations on malicious input
+- real oxideav-core Decoder registration (register + make_decoder dual API)
+- picture fragments (clause 14) - reassembly, stream constraints, stateful SequenceDecoder
+- complete Annex D default quantization matrices (asymmetric blocks + Table D.8 mixed pair)
+
 ### Added
 
 - **Container-tag declaration: FourCC `BBCD`.** `register(ctx)` now
