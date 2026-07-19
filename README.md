@@ -91,9 +91,11 @@ header and any partially assembled fragmented picture across calls.
 
 With the default `registry` feature the crate follows the workspace dual
 API: `oxideav_vc2::register(&mut ctx)` installs a `"vc2"` decoder into the
-codec registry, and `oxideav_vc2::make_decoder(&params)` is the direct
-factory. Packets must carry whole VC-2 data units (the parse-info headers
-are the codec's own framing); fragmented pictures may span packets.
+codec registry — along with the `BBCD` FourCC tag claim described above,
+so `CodecResolver::resolve_tag` routes matching container streams here —
+and `oxideav_vc2::make_decoder(&params)` is the direct factory. Packets
+must carry whole VC-2 data units (the parse-info headers are the codec's
+own framing); fragmented pictures may span packets.
 
 The crate builds with `--no-default-features` for a dependency-free standalone
 decoder; the default `registry` feature pulls in `oxideav-core` for fleet

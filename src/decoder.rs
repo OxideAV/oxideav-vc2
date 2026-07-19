@@ -15,6 +15,23 @@
 //! packet per picture, per fragment, or a whole sequence per packet —
 //! because the wrapped [`SequenceDecoder`] keeps the sequence header and
 //! any partially assembled fragmented picture across packets.
+//!
+//! ## Output surfaces
+//!
+//! Frames ride the exact planar format when one names the picture's
+//! depths (uniform 8/10/12-bit, byte or LSB-anchored word planes),
+//! promote onto the full-width 16-bit formats when any component needs
+//! more than 12 bits, and otherwise — mixed or off-format ≤12-bit
+//! custom signal ranges — decode verbatim onto the deepest component's
+//! surface with a per-plane significant-bits side-channel attached.
+//! The full decision rationale lives on this module's internal
+//! `SurfaceMapping` type.
+//!
+//! ## Container tags
+//!
+//! [`register`] claims the FourCC `BBCD` (the §10.5.1 parse-info
+//! prefix — the one identifier the staged specification grounds),
+//! backed by a confidence probe; see [`register`]'s docs.
 
 use std::collections::VecDeque;
 
@@ -367,7 +384,9 @@ pub fn make_decoder(params: &CodecParameters) -> oxideav_core::Result<Box<dyn De
 /// staged specification grounds is claimed as a FourCC: the parse-info
 /// prefix bytes `0x42 0x42 0x43 0x44` — the character string **"BBCD"**
 /// as expressed by ISO/IEC 646 (§10.5.1, NOTE 1) — which every VC-2
-/// data unit begins with, backed by [`probe_parse_info`]. ST 2042-1
+/// data unit begins with, backed by a confidence probe (a peeked
+/// packet is decisive either way; a parse-info-shaped stream-format
+/// blob confirms; a bare tag match is weak evidence). ST 2042-1
 /// itself registers no container-scoped identifiers (no AVI/MP4 FourCC,
 /// Matroska CodecID, MP4 ObjectTypeIndication or MXF label; Annex C
 /// defers even level values to companion documents), so no other tag is

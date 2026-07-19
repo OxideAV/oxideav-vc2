@@ -47,8 +47,15 @@
 //! dual API: the [`register`] entry point installs a `"vc2"` decoder into a
 //! [`oxideav_core::RuntimeContext`] codec registry, and [`make_decoder`] is
 //! the direct factory. Packets carry whole VC-2 data units (the parse-info
-//! framing is the codec's own); fragmented pictures may span packets. See
-//! [`decoder`].
+//! framing is the codec's own); fragmented pictures may span packets.
+//! `register` also claims the container tag the staged specification
+//! grounds — the FourCC `BBCD`, VC-2's own §10.5.1 parse-info prefix —
+//! with a confidence probe, so container `CodecResolver` lookups route
+//! matching streams here. Output rides exact planar formats where one
+//! exists; mixed or off-format ≤12-bit custom signal ranges decode
+//! LSB-anchored on the deepest component's surface with the core
+//! per-plane significant-bits side-channel attached, and >12-bit ranges
+//! promote onto the full-width 16-bit formats. See [`decoder`].
 //!
 //! ## Quick start (standalone)
 //!
