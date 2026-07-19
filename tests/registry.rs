@@ -844,3 +844,58 @@ fn extradata_sequence_header_primes_the_decoder() {
     };
     assert_eq!(v.planes[0].data, vec![129, 130, 131, 132]);
 }
+
+#[test]
+fn corrupted_mixed_depth_streams_yield_well_formed_frames_or_errors() {
+    // Flip every bit of a valid mixed 12/10 stream and push each mutant
+    // through a fresh Decoder. Flips inside the §11.4.9 range fields
+    // derive arbitrary depth pairs within the 1..=16 contract, so this
+    // sweeps the whole surface-mapping table under hostile input: every
+    // send/receive must return promptly, and any frame that does come
+    // out must be well-formed — exactly three image planes, and any
+    // attached significant-bits record covering them with per-plane
+    // depths inside 1..=16.
+    let p = PicParams::hq_depth0();
+    let range = SignalRange::Custom {
+        luma_offset: 256,
+        luma_excursion: 3504,
+        color_diff_offset: 512,
+        color_diff_excursion: 896,
+    };
+    let seq = sequence_header_body_full(2, 2, p.major_version, 0, range);
+    let y = [100i64, -100, 1200, -256];
+    let c = [200i64, -200, 1, -1];
+    let pic = picture_body(&p, 7, &[hq_slice_bytes(p.qindex, &y, &c, &c)]);
+    let stream = build_units(&[(0x00, seq), (0xE8, pic)]);
+
+    for byte in 0..stream.len() {
+        let all = [0u8, 1, 2, 3, 4, 5, 6, 7];
+        let one = [(byte % 8) as u8];
+        let bits: &[u8] = if cfg!(miri) { &one } else { &all };
+        for &bit in bits {
+            let mut corrupt = stream.clone();
+            corrupt[byte] ^= 1 << bit;
+            let mut dec = oxideav_vc2::make_decoder(&vc2_params()).expect("factory");
+            if dec.send_packet(&packet(corrupt, 0)).is_err() {
+                continue;
+            }
+            while let Ok(frame) = dec.receive_frame() {
+                let Frame::Video(v) = frame else {
+                    panic!("byte {byte} bit {bit}: non-video frame");
+                };
+                assert_eq!(
+                    v.image_planes().len(),
+                    3,
+                    "byte {byte} bit {bit}: wrong image-plane count"
+                );
+                if let Some(bits) = v.significant_bits() {
+                    assert_eq!(bits.len(), 3, "byte {byte} bit {bit}: record length");
+                    assert!(
+                        bits.iter().all(|&b| (1..=16).contains(&b)),
+                        "byte {byte} bit {bit}: out-of-contract record {bits:?}"
+                    );
+                }
+            }
+        }
+    }
+}

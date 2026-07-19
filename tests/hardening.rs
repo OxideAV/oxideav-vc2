@@ -219,6 +219,59 @@ fn single_bit_corruption_of_16bit_stream_never_panics() {
     }
 }
 
+/// A well-formed single-picture mixed-depth (12-bit luma / 10-bit
+/// chroma custom range) stream.
+fn good_mixed_stream() -> Vec<u8> {
+    let p = PicParams::hq_depth0();
+    let range = SignalRange::Custom {
+        luma_offset: 256,
+        luma_excursion: 3504,
+        color_diff_offset: 512,
+        color_diff_excursion: 896,
+    };
+    let seq = sequence_header_body_full(2, 2, p.major_version, 0, range);
+    let y = [100i64, -100, 1200, -256];
+    let c = [200i64, -200, 1, -1];
+    let pic = picture_body(&p, 7, &[hq_slice_bytes(p.qindex, &y, &c, &c)]);
+    build_units(&[(0x00, seq), (0xE8, pic)])
+}
+
+#[test]
+fn every_truncation_point_errors_cleanly_mixed_depth() {
+    // The truncation sweep repeated on a mixed 12/10 custom-range
+    // stream: the longer explicit signal-range header (§11.4.9 index 0
+    // plus four values) adds cut points inside the range fields, and
+    // the represented-depth path must keep the same EOF discipline.
+    let stream = good_mixed_stream();
+    assert!(decode_sequence(&stream).is_ok());
+    for len in 0..stream.len() {
+        assert!(
+            decode_sequence(&stream[..len]).is_err(),
+            "truncation at {len} of {} unexpectedly decoded",
+            stream.len()
+        );
+    }
+}
+
+#[test]
+fn single_bit_corruption_of_mixed_depth_stream_never_panics() {
+    // Flip every bit of a valid mixed-depth stream, one at a time.
+    // Flips inside the §11.4.9 range fields mutate the derived depth
+    // pair arbitrarily within the 1..=16 contract; whatever comes out
+    // must decode or error promptly, never panic.
+    let stream = good_mixed_stream();
+    for byte in 0..stream.len() {
+        let all = [0u8, 1, 2, 3, 4, 5, 6, 7];
+        let one = [(byte % 8) as u8];
+        let bits: &[u8] = if cfg!(miri) { &one } else { &all };
+        for &bit in bits {
+            let mut corrupt = stream.clone();
+            corrupt[byte] ^= 1 << bit;
+            let _ = decode_sequence(&corrupt);
+        }
+    }
+}
+
 #[test]
 fn ld_slice_smaller_than_header_is_rejected() {
     // slice_bytes 5/8 -> some slices are 0 bytes: cannot even hold the

@@ -58,7 +58,14 @@ on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (index 0) §11.4.9 signal range — even one holding exactly the
   preset-3 values it accepts by index — so, like the 16-bit presets,
   the mixed fixture is a self-consistent reference riding the
-  externally corroborated decode path.
+  externally corroborated decode path. Hardening keeps pace: the
+  every-truncation-point sweep and the every-bit-flip corruption sweep
+  now also run over a mixed 12/10 custom-range stream (whose explicit
+  §11.4.9 index-0 range fields add cut and flip points the preset
+  headers don't have), and a wrapper-level flip sweep pushes every
+  mutant through a fresh `Decoder`, asserting each emitted frame is
+  well-formed — exactly three image planes and, when present, a
+  three-entry significant-bits record with every value in 1..=16.
 
 - **16-bit output through the registered `Decoder`.** Pictures whose
   video depth exceeds 12 bits — the Table 10 preset-7/8 (16-bit) signal
