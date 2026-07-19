@@ -20,6 +20,13 @@
 //! cases exercise (the only depth-dependent deltas are the §11.6.3
 //! depth derivation and the §15.5 clip/offset constants, unit-tested
 //! against the spec formulas).
+//!
+//! The r418 mixed 12/10 custom-range case is in the same boat: probe
+//! experiments show the validator refuses **every** custom (index 0)
+//! §11.4.9 signal range — including one holding exactly the preset-3
+//! values it accepts by index — so no external corroboration for any
+//! custom-range stream is obtainable from it, and the mixed pin is a
+//! self-consistent reference on the corroborated decode path.
 
 mod common;
 
@@ -42,14 +49,20 @@ fn coeffs(n: usize, amp: i64, seed: u64) -> Vec<i64> {
 }
 
 struct Case {
-    /// Table 10 preset index.
-    preset: u64,
+    /// Human label for assertion messages (matches the fixture stem).
+    label: &'static str,
+    /// LCG seed key added to the generation seed bases. Historically
+    /// the Table 10 preset index; kept verbatim so the staged fixture
+    /// bytes stay reproducible.
+    seed: u64,
     /// Coefficient amplitude used at generation time.
     amp: i64,
     /// Table 7 colour-difference sampling index.
     cds: u64,
     wavelet_index: u64,
     dwt_depth: u64,
+    /// Signal range written into the sequence header.
+    range: SignalRange,
     /// Committed fixture stream.
     stream: &'static [u8],
     /// Committed decode reference: planes Y, C1, C2 concatenated,
@@ -59,67 +72,101 @@ struct Case {
 
 const CASES: &[Case] = &[
     Case {
-        preset: 3,
+        label: "preset3_444_haar_d1",
+        seed: 3,
         amp: 300,
         cds: 0,
         wavelet_index: 4,
         dwt_depth: 1,
+        range: SignalRange::Preset(3),
         stream: include_bytes!("data/vc2_preset3_444_haar_d1.drc"),
         reference: include_bytes!("data/vc2_preset3_444_haar_d1.ref_p16le.raw"),
     },
     Case {
-        preset: 3,
+        label: "preset3_422_haar_d1",
+        seed: 3,
         amp: 300,
         cds: 1,
         wavelet_index: 4,
         dwt_depth: 1,
+        range: SignalRange::Preset(3),
         stream: include_bytes!("data/vc2_preset3_422_haar_d1.drc"),
         reference: include_bytes!("data/vc2_preset3_422_haar_d1.ref_p16le.raw"),
     },
     Case {
-        preset: 3,
+        label: "preset3_420_legall_d2",
+        seed: 3,
         amp: 300,
         cds: 2,
         wavelet_index: 1,
         dwt_depth: 2,
+        range: SignalRange::Preset(3),
         stream: include_bytes!("data/vc2_preset3_420_legall_d2.drc"),
         reference: include_bytes!("data/vc2_preset3_420_legall_d2.ref_p16le.raw"),
     },
     Case {
-        preset: 3,
+        label: "preset3_444_dd97_d2",
+        seed: 3,
         amp: 300,
         cds: 0,
         wavelet_index: 0,
         dwt_depth: 2,
+        range: SignalRange::Preset(3),
         stream: include_bytes!("data/vc2_preset3_444_dd97_d2.drc"),
         reference: include_bytes!("data/vc2_preset3_444_dd97_d2.ref_p16le.raw"),
     },
     Case {
-        preset: 4,
+        label: "preset4_444_haar_d1",
+        seed: 4,
         amp: 1200,
         cds: 0,
         wavelet_index: 4,
         dwt_depth: 1,
+        range: SignalRange::Preset(4),
         stream: include_bytes!("data/vc2_preset4_444_haar_d1.drc"),
         reference: include_bytes!("data/vc2_preset4_444_haar_d1.ref_p16le.raw"),
     },
     Case {
-        preset: 7,
+        label: "preset7_444_haar_d1",
+        seed: 7,
         amp: 20000,
         cds: 0,
         wavelet_index: 4,
         dwt_depth: 1,
+        range: SignalRange::Preset(7),
         stream: include_bytes!("data/vc2_preset7_444_haar_d1.drc"),
         reference: include_bytes!("data/vc2_preset7_444_haar_d1.ref_p16le.raw"),
     },
     Case {
-        preset: 8,
+        label: "preset8_444_haar_d1",
+        seed: 8,
         amp: 20000,
         cds: 0,
         wavelet_index: 4,
         dwt_depth: 1,
+        range: SignalRange::Preset(8),
         stream: include_bytes!("data/vc2_preset8_444_haar_d1.drc"),
         reference: include_bytes!("data/vc2_preset8_444_haar_d1.ref_p16le.raw"),
+    },
+    // Mixed custom §11.4.9 range assembled from Table 10 rows: the
+    // preset-4 luma pair (12-bit video levels) with the preset-3
+    // colour-difference pair (10-bit video levels) — the r418
+    // mixed-depth representation's headline 12/10 shape, at 4:2:2.
+    Case {
+        label: "mixed12l10c_422_legall_d1",
+        seed: 12,
+        amp: 1200,
+        cds: 1,
+        wavelet_index: 1,
+        dwt_depth: 1,
+        range: SignalRange::Custom {
+            luma_offset: 256,
+            luma_excursion: 3504,
+            color_diff_offset: 512,
+            color_diff_excursion: 896,
+        },
+        stream: include_bytes!("data/vc2_mixed12l10c_422_legall_d1.drc"),
+        reference: include_bytes!("data/vc2_mixed12l10c_422_legall_d1.ref_p16le.raw"),
     },
 ];
 
@@ -137,16 +184,10 @@ fn rebuild(case: &Case) -> Vec<u8> {
         1 => (W / 2, H),
         _ => (W / 2, H / 2),
     };
-    let y = coeffs(W * H, case.amp, 0x1234_5678 + case.preset);
-    let c1 = coeffs(cw * ch, case.amp / 2, 0x9abc_def0 + case.preset);
-    let c2 = coeffs(cw * ch, case.amp / 2, 0x0fed_cba9 + case.preset);
-    let seq = sequence_header_body_full(
-        W as u64,
-        H as u64,
-        p.major_version,
-        case.cds,
-        SignalRange::Preset(case.preset),
-    );
+    let y = coeffs(W * H, case.amp, 0x1234_5678 + case.seed);
+    let c1 = coeffs(cw * ch, case.amp / 2, 0x9abc_def0 + case.seed);
+    let c2 = coeffs(cw * ch, case.amp / 2, 0x0fed_cba9 + case.seed);
+    let seq = sequence_header_body_full(W as u64, H as u64, p.major_version, case.cds, case.range);
     let pic = picture_body(&p, 0, &[hq_slice_bytes(p.qindex, &y, &c1, &c2)]);
     build_units(&[(0x00, seq), (0xE8, pic)])
 }
@@ -157,11 +198,8 @@ fn fixtures_are_reproducible_from_the_harness() {
         assert_eq!(
             rebuild(case),
             case.stream,
-            "preset {} cds {} wavelet {} depth {}: staged fixture bytes diverge from the generator",
-            case.preset,
-            case.cds,
-            case.wavelet_index,
-            case.dwt_depth
+            "{}: staged fixture bytes diverge from the generator",
+            case.label
         );
     }
 }
@@ -180,8 +218,8 @@ fn fixture_decodes_match_pinned_references() {
         }
         assert_eq!(
             raw, case.reference,
-            "preset {} cds {}: decoded planes diverge from the pinned reference",
-            case.preset, case.cds
+            "{}: decoded planes diverge from the pinned reference",
+            case.label
         );
     }
 }
@@ -193,7 +231,10 @@ fn fixture_decodes_match_pinned_references() {
 #[cfg(feature = "registry")]
 fn sixteen_bit_fixture_frames_match_pinned_words() {
     use oxideav_core::{CodecId, CodecParameters, Frame, Packet, TimeBase};
-    for case in CASES.iter().filter(|c| c.preset >= 7) {
+    for case in CASES
+        .iter()
+        .filter(|c| matches!(c.range, SignalRange::Preset(p) if p >= 7))
+    {
         let params = CodecParameters::video(CodecId::new("vc2"));
         let mut dec = oxideav_vc2::make_decoder(&params).expect("factory");
         let pkt = Packet::new(0, TimeBase::MILLIS, case.stream.to_vec());
@@ -207,8 +248,39 @@ fn sixteen_bit_fixture_frames_match_pinned_words() {
         }
         assert_eq!(
             raw, case.reference,
-            "preset {}: Decoder frame diverges from the pinned reference",
-            case.preset
+            "{}: Decoder frame diverges from the pinned reference",
+            case.label
         );
     }
+}
+
+/// The mixed 12/10 fixture through the registered `Decoder`: the frame
+/// rides P12-word planes whose bytes equal the pinned standalone
+/// reference exactly (both are verbatim LSB-anchored LE code values),
+/// with the per-plane significant-bits record [12, 10, 10] attached.
+#[test]
+#[cfg(feature = "registry")]
+fn mixed_depth_fixture_frame_matches_pinned_words_with_record() {
+    use oxideav_core::{CodecId, CodecParameters, Frame, Packet, TimeBase};
+    let case = CASES
+        .iter()
+        .find(|c| c.label == "mixed12l10c_422_legall_d1")
+        .expect("mixed case present");
+    let params = CodecParameters::video(CodecId::new("vc2"));
+    let mut dec = oxideav_vc2::make_decoder(&params).expect("factory");
+    let pkt = Packet::new(0, TimeBase::MILLIS, case.stream.to_vec());
+    dec.send_packet(&pkt).expect("send");
+    let Frame::Video(v) = dec.receive_frame().expect("frame") else {
+        panic!("expected a video frame");
+    };
+    assert_eq!(v.significant_bits(), Some(&[12u8, 10, 10][..]));
+    let mut raw = Vec::with_capacity(case.reference.len());
+    for plane in v.image_planes() {
+        raw.extend_from_slice(&plane.data);
+    }
+    assert_eq!(
+        raw, case.reference,
+        "{}: Decoder frame diverges from the pinned reference",
+        case.label
+    );
 }

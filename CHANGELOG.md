@@ -48,7 +48,17 @@ on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   case, sub-byte mixes (8/6), uniform 9-bit, boundary depth 1 and the
   12/1 extreme spread, record presence switching across concatenated
   sequences, fragmented mixed-depth pictures, and no-record assertions
-  on the exact-format and promoted paths.
+  on the exact-format and promoted paths. The conformance matrix gains
+  an eighth pinned fixture for the headline shape — a custom range
+  assembled from Table 10 rows (preset-4 luma pair, preset-3
+  colour-difference pair) at 4:2:2 through a depth-1 LeGall transform —
+  whose `Decoder` frame must byte-match the pinned standalone reference
+  with the `[12, 10, 10]` record attached. Probe experiments confirm
+  the black-box validator's envelope excludes **every** custom
+  (index 0) §11.4.9 signal range — even one holding exactly the
+  preset-3 values it accepts by index — so, like the 16-bit presets,
+  the mixed fixture is a self-consistent reference riding the
+  externally corroborated decode path.
 
 - **16-bit output through the registered `Decoder`.** Pictures whose
   video depth exceeds 12 bits — the Table 10 preset-7/8 (16-bit) signal
