@@ -12,7 +12,8 @@ use common::{
     sequence_header_body, sequence_header_body_full, PicParams, SignalRange,
 };
 use oxideav_core::{
-    CodecId, CodecParameters, Error, Frame, Packet, RuntimeContext, TimeBase, VideoFrame,
+    CodecId, CodecParameters, CodecResolver, CodecTag, Error, Frame, Packet, ProbeContext,
+    RuntimeContext, TimeBase, VideoFrame,
 };
 
 fn vc2_params() -> CodecParameters {
@@ -60,6 +61,57 @@ fn registry_round_trip_via_register() {
     assert!(matches!(dec.receive_frame(), Err(Error::NeedMore)));
     dec.flush().expect("flush");
     assert!(matches!(dec.receive_frame(), Err(Error::Eof)));
+}
+
+#[test]
+fn parse_info_fourcc_tag_resolves_to_vc2() {
+    // The one tag the staged spec grounds: the parse-info prefix bytes
+    // "BBCD" (section 10.5.1, NOTE 1), claimed as a FourCC so a
+    // container's CodecResolver can route VC-2 essence tagged by its
+    // stream magic.
+    let mut ctx = RuntimeContext::new();
+    oxideav_vc2::register(&mut ctx);
+    let tag = CodecTag::fourcc(b"BBCD");
+
+    // Tag claim alone (no data hints) resolves.
+    let id = ctx.codecs.resolve_tag(&ProbeContext::new(&tag));
+    assert_eq!(id.expect("resolved").as_str(), "vc2");
+    // Case-insensitive FourCC normalization applies to lookups too.
+    let lower = CodecTag::fourcc(b"bbcd");
+    assert!(ctx.codecs.resolve_tag(&ProbeContext::new(&lower)).is_some());
+
+    // A peeked first packet holding real data units confirms the claim.
+    let (stream, _) = simple_stream();
+    let pctx = ProbeContext::new(&tag).packet(&stream);
+    assert_eq!(
+        ctx.codecs.resolve_tag(&pctx).expect("packet").as_str(),
+        "vc2"
+    );
+
+    // A first packet that cannot be VC-2 data units vetoes it: packets
+    // must carry whole data units, each starting with the prefix.
+    let not_vc2 = [0u8; 16];
+    let pctx = ProbeContext::new(&tag).packet(&not_vc2);
+    assert!(ctx.codecs.resolve_tag(&pctx).is_none());
+
+    // An out-of-band sequence header staged as the container's
+    // stream-format blob also confirms (the extradata shape
+    // Vc2Decoder::new accepts).
+    let p = PicParams::hq_depth0();
+    let seq = sequence_header_body(2, 2, p.major_version);
+    let mut header = Vec::new();
+    parse_info(&mut header, 0x00, (13 + seq.len()) as u32, 0);
+    header.extend_from_slice(&seq);
+    let pctx = ProbeContext::new(&tag).header(&header);
+    assert_eq!(
+        ctx.codecs.resolve_tag(&pctx).expect("header").as_str(),
+        "vc2"
+    );
+
+    // Only the FourCC claim exists — no Matroska / WaveFormat / MP4-OTI
+    // identifier is declared (none is derivable from staged material).
+    let other = CodecTag::matroska("V_SYNTHETIC_TEST_ID");
+    assert!(ctx.codecs.resolve_tag(&ProbeContext::new(&other)).is_none());
 }
 
 #[test]

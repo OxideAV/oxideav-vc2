@@ -7,6 +7,24 @@ on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Container-tag declaration: FourCC `BBCD`.** `register(ctx)` now
+  claims the one wire identifier the staged specification grounds — the
+  parse-info prefix bytes `0x42 0x42 0x43 0x44`, the character string
+  "BBCD" as expressed by ISO/IEC 646 (§10.5.1, NOTE 1), which every
+  VC-2 data unit begins with — so a container's `CodecResolver` can
+  route VC-2 essence tagged by its stream magic to the `"vc2"` decoder.
+  The claim carries a confidence probe: a peeked first packet is
+  decisive either way (the packet contract requires whole data units,
+  each starting with the prefix), an out-of-band sequence header staged
+  as the container's stream-format blob confirms, any other blob shape
+  is non-disqualifying (the decoder tolerates unrecognized extradata),
+  and a bare tag match resolves with weak confidence so a
+  harder-evidenced claimant of the same tag would win. ST 2042-1:2022
+  registers no container-scoped identifiers of its own (no AVI/MP4
+  FourCC, Matroska CodecID, MP4 ObjectTypeIndication or MXF label;
+  Annex C defers even level values to companion SMPTE documents), so no
+  other tag is declared until staged references ground one.
+
 - **Mixed and off-format ≤12-bit depths decode through the `Decoder`,
   represented via the per-plane significant-bits side-channel.** Custom
   §11.4.9 signal ranges whose derived component depths have no exact

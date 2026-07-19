@@ -19,8 +19,8 @@
 use std::collections::VecDeque;
 
 use oxideav_core::{
-    CodecCapabilities, CodecId, CodecInfo, CodecParameters, Decoder, Frame, Packet, PixelFormat,
-    RuntimeContext, VideoFrame, VideoPlane,
+    CodecCapabilities, CodecId, CodecInfo, CodecParameters, CodecTag, Confidence, Decoder, Frame,
+    Packet, PixelFormat, ProbeContext, RuntimeContext, VideoFrame, VideoPlane,
 };
 
 use crate::picture::DecodedPicture;
@@ -29,6 +29,34 @@ use crate::PARSE_INFO_PREFIX;
 
 /// Registry identifier this crate claims.
 pub const CODEC_ID: &str = "vc2";
+
+/// Confidence probe backing the parse-info FourCC tag claim made in
+/// [`register`].
+///
+/// A packet, when the demuxer has peeked one, is decisive either way:
+/// the packet contract requires whole data units, and every data unit
+/// begins with the §10.5.1 parse-info prefix — so a matching first
+/// packet confirms the claim (1.0) and a non-matching one vetoes it
+/// (0.0). Without a packet, a container stream-format blob that itself
+/// starts with a parse-info header (the out-of-band sequence-header
+/// staging [`Vc2Decoder::new`] accepts) confirms; any other blob shape
+/// is *not* disqualifying, because the decoder tolerates and ignores
+/// unrecognized extradata. With no evidence beyond the tag itself the
+/// probe returns weak confidence, letting a hypothetical
+/// harder-evidenced claimant of the same tag win.
+fn probe_parse_info(ctx: &ProbeContext) -> Confidence {
+    match (ctx.packet, ctx.header) {
+        (Some(p), _) => {
+            if p.starts_with(&PARSE_INFO_PREFIX) {
+                1.0
+            } else {
+                0.0
+            }
+        }
+        (None, Some(h)) if h.starts_with(&PARSE_INFO_PREFIX) => 1.0,
+        _ => 0.5,
+    }
+}
 
 /// VC-2 decoder speaking the `oxideav-core` [`Decoder`] packet/frame
 /// contract. Construct via [`make_decoder`] (or through a registry
@@ -331,6 +359,19 @@ pub fn make_decoder(params: &CodecParameters) -> oxideav_core::Result<Box<dyn De
 
 /// Install the VC-2 decoder into the runtime context's codec registry
 /// under the `"vc2"` codec id.
+///
+/// ## Container tags
+///
+/// Per the workspace convention the codec crate declares the tags a
+/// container's `CodecResolver` may route to it. The one identifier the
+/// staged specification grounds is claimed as a FourCC: the parse-info
+/// prefix bytes `0x42 0x42 0x43 0x44` — the character string **"BBCD"**
+/// as expressed by ISO/IEC 646 (§10.5.1, NOTE 1) — which every VC-2
+/// data unit begins with, backed by [`probe_parse_info`]. ST 2042-1
+/// itself registers no container-scoped identifiers (no AVI/MP4 FourCC,
+/// Matroska CodecID, MP4 ObjectTypeIndication or MXF label; Annex C
+/// defers even level values to companion documents), so no other tag is
+/// declared until staged references ground one.
 pub fn register(ctx: &mut RuntimeContext) {
     let mut caps = CodecCapabilities::video("vc2_sw");
     caps.intra_only = true; // every VC-2 picture decodes independently
@@ -339,7 +380,9 @@ pub fn register(ctx: &mut RuntimeContext) {
     ctx.codecs.register(
         CodecInfo::new(CodecId::new(CODEC_ID))
             .capabilities(caps)
-            .decoder(make_decoder),
+            .decoder(make_decoder)
+            .tag(CodecTag::fourcc(&PARSE_INFO_PREFIX))
+            .probe(probe_parse_info),
     );
 }
 
@@ -475,6 +518,33 @@ mod tests {
         let m = surface_mapping(&pic((4, 2, 16), (2, 1, 16))).unwrap();
         assert_eq!(m.luma_shift, 0);
         assert_eq!(m.chroma_shift, 0);
+    }
+
+    #[test]
+    fn parse_info_probe_confidence() {
+        let tag = CodecTag::fourcc(&PARSE_INFO_PREFIX);
+        let good = [0x42, 0x42, 0x43, 0x44, 0x00]; // "BBCD" + parse code
+        let bad = [0u8; 5];
+        // A peeked packet is decisive either way (whole-data-unit
+        // contract), and its veto beats any header evidence.
+        assert_eq!(
+            probe_parse_info(&ProbeContext::new(&tag).packet(&good)),
+            1.0
+        );
+        assert_eq!(probe_parse_info(&ProbeContext::new(&tag).packet(&bad)), 0.0);
+        assert_eq!(
+            probe_parse_info(&ProbeContext::new(&tag).packet(&bad).header(&good)),
+            0.0
+        );
+        // Without a packet: a parse-info-shaped stream-format blob
+        // confirms; other blob shapes are ignored, not disqualifying.
+        assert_eq!(
+            probe_parse_info(&ProbeContext::new(&tag).header(&good)),
+            1.0
+        );
+        assert_eq!(probe_parse_info(&ProbeContext::new(&tag).header(&bad)), 0.5);
+        // Tag match alone is weak evidence.
+        assert_eq!(probe_parse_info(&ProbeContext::new(&tag)), 0.5);
     }
 
     #[test]

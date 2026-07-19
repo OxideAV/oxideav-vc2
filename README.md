@@ -54,10 +54,25 @@ as does the >12-bit promotion path (there the `16 - depth` left shift
 already places full-scale at the top of the 16-bit word, so an
 LSB-anchored depth record would misdescribe the values).
 
-### Not yet implemented
+### Container tags
 
-- No container tags are claimed yet (FourCC / Matroska mapping for VC-2 in
-  containers is deliberately left to a coordinated fleet decision).
+Per the workspace convention the codec crate declares the tags a
+container's `CodecResolver` may route to it; `register(ctx)` claims the
+one identifier the staged specification grounds:
+
+- **FourCC `BBCD`** — the parse-info prefix bytes `0x42 0x42 0x43 0x44`,
+  the character string "BBCD" as expressed by ISO/IEC 646 (§10.5.1,
+  NOTE 1), which every VC-2 data unit begins with. The claim carries a
+  probe: a peeked first packet is decisive either way (packets must hold
+  whole data units, each starting with the prefix), an out-of-band
+  sequence header staged as the container's stream-format blob confirms,
+  and a bare tag match resolves with weak confidence.
+
+ST 2042-1:2022 registers no container-scoped identifiers of its own — no
+AVI/MP4 FourCC, Matroska CodecID, MP4 ObjectTypeIndication or MXF label
+appears in the standard (Annex C even defers level values to companion
+SMPTE documents) — so no other tag is declared until staged references
+ground one.
 
 ## Usage (standalone)
 
