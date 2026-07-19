@@ -32,17 +32,32 @@ end-to-end on hand-assembled VC-2 streams.
 | Picture fragments (setup/data, reassembly, constraints) | §14 | ✅ raster-order slice reassembly, deferred DC prediction, §14.1/§14.2 violations rejected; chunk-fed via `SequenceDecoder::push` |
 | IDWT lifting filters (all 7 wavelets) | §15.4.4 / Tables 16–22 | ✅ reversibility-tested (LeGall) |
 | Component IDWT + pad removal + clip + offset | §15 | ✅ |
-| `oxideav-core` `Decoder` (registry + direct factory) | — | ✅ `register(ctx)` + `make_decoder`; 8/10/12/16-bit planar YUV output (Table 10 presets 7/8 and >12-bit custom ranges ride the full-width 16-bit formats); fragments may span packets |
+| `oxideav-core` `Decoder` (registry + direct factory) | — | ✅ `register(ctx)` + `make_decoder`; 8/10/12/16-bit planar YUV output (Table 10 presets 7/8 and >12-bit custom ranges ride the full-width 16-bit formats); mixed / off-format ≤12-bit custom ranges decode LSB-anchored on the deepest component's surface with a per-plane significant-bits side-channel; fragments may span packets |
 | Hostile-input hardening | — | ✅ truncation → `UnexpectedEof` at every cut point (8- and 16-bit streams); saturating VLC/quant math; documented caps on depth / area / slice counts / signal offsets+excursions; bit-flip + garbage fuzz-lite in CI |
 | Conformance fixtures | — | ✅ 7-case pinned matrix (`tests/data/`, staged under `docs/video/vc2/fixtures/`): 10/12-bit cases bit-exact vs an independent black-box validator across all samplings + 3 wavelets; 16-bit presets 7/8 pinned as self-consistent references (validator envelope excludes ranges 5..=8) |
+
+### Mixed and off-format bit depths
+
+Custom §11.4.9 signal ranges can derive per-component depths that no
+single planar pixel format names — mixed pairs (12-bit luma with 10-bit
+chroma) or uniform odd depths (9, 11, …). At or below 12 bits these are
+**represented, not promoted or refused**: the picture decodes onto the
+natural storage surface for its deepest component (byte planes up to
+8 bits, `P10Le` words up to 10, `P12Le` words up to 12), every plane
+keeps its §15.5 code values verbatim in the low bits of the storage
+word, and the emitted `VideoFrame` carries the `oxideav-core`
+per-plane **significant-bits side-channel** (`significant_bits()` /
+`plane_significant_bits(k)`) recording each plane's true depth —
+full-scale for a plane with `b` significant bits is `(1 << b) - 1`.
+Uniform 8/10/12-bit pictures attach no record and stay byte-identical,
+as does the >12-bit promotion path (there the `16 - depth` left shift
+already places full-scale at the top of the 16-bit word, so an
+LSB-anchored depth record would misdescribe the values).
 
 ### Not yet implemented
 
 - No container tags are claimed yet (FourCC / Matroska mapping for VC-2 in
   containers is deliberately left to a coordinated fleet decision).
-- Mixed luma/chroma bit depths at or below 12 bits (custom signal ranges
-  only) have no exact planar format and are reported unsupported by the
-  `Decoder` wrapper; the standalone API decodes them.
 
 ## Usage (standalone)
 

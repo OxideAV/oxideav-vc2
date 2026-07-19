@@ -7,6 +7,31 @@ on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Mixed and off-format ≤12-bit depths decode through the `Decoder`,
+  represented via the per-plane significant-bits side-channel.** Custom
+  §11.4.9 signal ranges whose derived component depths have no exact
+  planar format — mixed pairs such as 12-bit luma with 10-bit chroma,
+  and uniform odd depths like 9 or 11 — were previously reported
+  unsupported by the wrapper. They now decode onto the natural common
+  storage surface for the picture's deepest component (byte planes up
+  to 8 bits, `P10Le` words up to 10, `P12Le` words up to 12) with every
+  plane's §15.5 code values kept verbatim in the low bits of the
+  storage word (LSB-anchored, the core partial-depth convention), and
+  the emitted frame carries the `oxideav-core` 0.1.31 per-plane
+  significant-bits side-channel (`VideoFrame::significant_bits` /
+  `plane_significant_bits`) recording each plane's true depth —
+  represented, not promoted or refused. Uniform 8/10/12-bit pictures
+  attach no record and remain byte-identical, and the >12-bit promotion
+  path (Table 10 presets 7/8 and deep custom ranges, mixed or not) also
+  deliberately stays record-free and byte-identical: its `16 - depth`
+  left shift already places each plane's full-scale at the top of the
+  16-bit word, so an LSB-anchored depth record would misdescribe where
+  the values sit. Covered end-to-end by tests for the 12/10 headline
+  case, sub-byte mixes (8/6), uniform 9-bit, boundary depth 1 and the
+  12/1 extreme spread, record presence switching across concatenated
+  sequences, fragmented mixed-depth pictures, and no-record assertions
+  on the exact-format and promoted paths.
+
 - **16-bit output through the registered `Decoder`.** Pictures whose
   video depth exceeds 12 bits — the Table 10 preset-7/8 (16-bit) signal
   ranges and custom §11.4.9 ranges with excursions above 4095 — now map

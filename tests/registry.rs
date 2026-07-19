@@ -11,7 +11,9 @@ use common::{
     build_units, fragment_data_body, fragment_setup_body, hq_slice_bytes, parse_info, picture_body,
     sequence_header_body, sequence_header_body_full, PicParams, SignalRange,
 };
-use oxideav_core::{CodecId, CodecParameters, Error, Frame, Packet, RuntimeContext, TimeBase};
+use oxideav_core::{
+    CodecId, CodecParameters, Error, Frame, Packet, RuntimeContext, TimeBase, VideoFrame,
+};
 
 fn vc2_params() -> CodecParameters {
     CodecParameters::video(CodecId::new("vc2"))
@@ -373,27 +375,283 @@ fn depth_derivation_boundary_15_vs_16() {
     );
 }
 
-#[test]
-fn shallow_mixed_depths_stay_unsupported() {
-    // Luma 10-bit with chroma 8-bit: no exact format, and no component
-    // needs the 16-bit surface — the wrapper must refuse rather than
-    // silently promote into a deeper format's significant bits.
-    let range = SignalRange::Custom {
-        luma_offset: 0,
-        luma_excursion: 1023,
-        color_diff_offset: 128,
-        color_diff_excursion: 255,
-    };
+/// Decode a single-picture 2x2 4:4:4 HQ depth-0 stream with the given
+/// signal range and return the emitted `VideoFrame` whole (image planes
+/// plus any attached side-channel).
+fn decode_frame(range: SignalRange, y: &[i64; 4], c1: &[i64; 4], c2: &[i64; 4]) -> VideoFrame {
     let p = PicParams::hq_depth0();
     let seq = sequence_header_body_full(2, 2, p.major_version, 0, range);
-    let c = [0i64; 4];
-    let pic = picture_body(&p, 1, &[hq_slice_bytes(p.qindex, &c, &c, &c)]);
+    let pic = picture_body(&p, 1, &[hq_slice_bytes(p.qindex, y, c1, c2)]);
     let stream = build_units(&[(0x00, seq), (0xE8, pic)]);
     let mut dec = oxideav_vc2::make_decoder(&vc2_params()).expect("factory");
-    assert!(matches!(
-        dec.send_packet(&packet(stream, 0)),
-        Err(Error::Unsupported(_))
-    ));
+    dec.send_packet(&packet(stream, 0)).unwrap();
+    let Frame::Video(v) = dec.receive_frame().expect("frame") else {
+        panic!("expected a video frame");
+    };
+    v
+}
+
+fn le_words(p: &oxideav_core::VideoPlane) -> Vec<u16> {
+    p.data
+        .chunks_exact(2)
+        .map(|b| u16::from_le_bytes([b[0], b[1]]))
+        .collect()
+}
+
+#[test]
+fn mixed_12bit_luma_10bit_chroma_carries_a_significant_bits_record() {
+    // The headline mixed-depth case: custom §11.4.9 range with a 12-bit
+    // luma excursion and a 10-bit chroma excursion. The picture rides
+    // the deepest component's natural surface (P12-word planes),
+    // verbatim LSB-anchored code values, and the frame carries the
+    // per-plane significant-bits side-channel [12, 10, 10].
+    let range = SignalRange::Custom {
+        luma_offset: 256,
+        luma_excursion: 4095,
+        color_diff_offset: 512,
+        color_diff_excursion: 1023,
+    };
+    let y = [100i64, -100, 2047, -2048]; // 12-bit clip extremes last
+    let c1 = [7i64, -7, 511, -512]; // 10-bit clip extremes last
+    let c2 = [1i64, -1, 0, 300];
+    let v = decode_frame(range, &y, &c1, &c2);
+
+    // Three image planes plus the trailing side-channel entry; the
+    // typed accessors exclude it from the image-plane view.
+    assert_eq!(v.planes.len(), 4);
+    assert_eq!(v.image_planes().len(), 3);
+    assert_eq!(v.significant_bits(), Some(&[12u8, 10, 10][..]));
+    assert_eq!(v.plane_significant_bits(0), Some(12));
+    assert_eq!(v.plane_significant_bits(1), Some(10));
+    assert_eq!(v.plane_significant_bits(2), Some(10));
+
+    // Verbatim §15.5 code values, no promotion shift on either plane.
+    assert_eq!(
+        le_words(&v.image_planes()[0]),
+        y.map(|s| (s + 2048) as u16).to_vec()
+    );
+    assert_eq!(
+        le_words(&v.image_planes()[1]),
+        c1.map(|s| (s + 512) as u16).to_vec()
+    );
+    assert_eq!(
+        le_words(&v.image_planes()[2]),
+        c2.map(|s| (s + 512) as u16).to_vec()
+    );
+    // Each plane's full-scale is (1 << b) - 1 for its recorded depth.
+    assert_eq!(le_words(&v.image_planes()[0])[2], 4095);
+    assert_eq!(le_words(&v.image_planes()[1])[2], 1023);
+}
+
+#[test]
+fn mixed_sub_byte_depths_ride_byte_planes_with_a_record() {
+    // 8-bit luma with 6-bit chroma: the deepest component fits a byte,
+    // so the surface is the plain 8-bit format — byte planes, record
+    // [8, 6, 6], chroma full-scale 63.
+    let range = SignalRange::Custom {
+        luma_offset: 0,
+        luma_excursion: 255,
+        color_diff_offset: 32,
+        color_diff_excursion: 63,
+    };
+    let y = [10i64, -10, 127, -128];
+    let c = [5i64, -5, 31, -32]; // 6-bit clip extremes last
+    let v = decode_frame(range, &y, &c, &c);
+    assert_eq!(v.image_planes().len(), 3);
+    assert_eq!(v.significant_bits(), Some(&[8u8, 6, 6][..]));
+    // Byte-per-sample planes (stride == width), values LSB-anchored.
+    assert_eq!(v.image_planes()[0].stride, 2);
+    assert_eq!(
+        v.image_planes()[0].data,
+        y.map(|s| (s + 128) as u8).to_vec()
+    );
+    assert_eq!(v.image_planes()[1].data, c.map(|s| (s + 32) as u8).to_vec());
+    assert_eq!(v.image_planes()[1].data[2], 63); // 6-bit full-scale
+}
+
+#[test]
+fn uniform_9bit_stream_is_represented_on_p10_words() {
+    // Equal 9-bit components (excursion 511): no exact format exists,
+    // so the picture rides the P10-word surface with a [9, 9, 9]
+    // record instead of being refused or promoted.
+    let range = SignalRange::Custom {
+        luma_offset: 256,
+        luma_excursion: 511,
+        color_diff_offset: 256,
+        color_diff_excursion: 511,
+    };
+    let y = [100i64, -100, 255, -256]; // 9-bit clip extremes last
+    let c = [0i64; 4];
+    let v = decode_frame(range, &y, &c, &c);
+    assert_eq!(v.significant_bits(), Some(&[9u8, 9, 9][..]));
+    assert_eq!(
+        le_words(&v.image_planes()[0]),
+        y.map(|s| (s + 256) as u16).to_vec()
+    );
+    assert_eq!(le_words(&v.image_planes()[0])[2], 511); // 9-bit full-scale
+    assert!(le_words(&v.image_planes()[1]).iter().all(|&w| w == 256));
+}
+
+#[test]
+fn hostile_boundary_depths_still_decode_with_faithful_records() {
+    // Depth 1 (excursion 1) on both components — the shallowest legal
+    // signal range. Byte planes, record [1, 1, 1], code values 0/1.
+    let range = SignalRange::Custom {
+        luma_offset: 0,
+        luma_excursion: 1,
+        color_diff_offset: 1,
+        color_diff_excursion: 1,
+    };
+    let y = [0i64, 1, -1, 2]; // clips to 0..=1 around offset 0
+    let c = [0i64; 4];
+    let v = decode_frame(range, &y, &c, &c);
+    assert_eq!(v.significant_bits(), Some(&[1u8, 1, 1][..]));
+    assert!(v.image_planes()[0].data.iter().all(|&b| b <= 1));
+
+    // Maximal legal spread below the promotion cut: 12-bit luma with
+    // 1-bit chroma shares the P12 surface under one record.
+    let range = SignalRange::Custom {
+        luma_offset: 2048,
+        luma_excursion: 4095,
+        color_diff_offset: 0,
+        color_diff_excursion: 1,
+    };
+    let v = decode_frame(range, &y, &c, &c);
+    assert_eq!(v.significant_bits(), Some(&[12u8, 1, 1][..]));
+    assert!(le_words(&v.image_planes()[1]).iter().all(|&w| w <= 1));
+}
+
+#[test]
+fn uniform_and_promoted_streams_attach_no_record() {
+    // Uniform 10-bit (Table 10 preset 3): exact format, no side-channel
+    // — the frame is byte-identical to previous releases.
+    let y = [100i64, -100, 0, 511];
+    let c = [0i64; 4];
+    let v = decode_frame(SignalRange::Preset(3), &y, &c, &c);
+    assert_eq!(v.planes.len(), 3);
+    assert_eq!(v.significant_bits(), None);
+
+    // Promoted >12-bit mix (16-bit luma / 12-bit chroma): the per-plane
+    // promotion shift is the representation; no record is attached and
+    // the plane bytes stay exactly as before (chroma << 4).
+    let range = SignalRange::Custom {
+        luma_offset: 0,
+        luma_excursion: 65535,
+        color_diff_offset: 2048,
+        color_diff_excursion: 4095,
+    };
+    let yd = [-32768i64, 32767, 5, -5];
+    let cd = [100i64, -100, 2047, -2048];
+    let v = decode_frame(range, &yd, &cd, &cd);
+    assert_eq!(v.planes.len(), 3);
+    assert_eq!(v.significant_bits(), None);
+    assert_eq!(
+        le_words(&v.planes[0]),
+        yd.map(|s| (s + 32768) as u16).to_vec()
+    );
+    assert_eq!(
+        le_words(&v.planes[1]),
+        cd.map(|s| ((s + 2048) as u16) << 4).to_vec()
+    );
+}
+
+#[test]
+fn record_presence_switches_across_concatenated_sequences() {
+    // A mixed-depth sequence followed by a uniform 8-bit sequence from
+    // the same decoder: the record must appear on the first frame and
+    // be absent from the second (per-picture surface selection).
+    let p = PicParams::hq_depth0();
+    let mixed = SignalRange::Custom {
+        luma_offset: 256,
+        luma_excursion: 4095,
+        color_diff_offset: 512,
+        color_diff_excursion: 1023,
+    };
+    let y = [1i64, -1, 2, -2];
+    let c = [0i64; 4];
+    let mut stream = build_units(&[
+        (
+            0x00,
+            sequence_header_body_full(2, 2, p.major_version, 0, mixed),
+        ),
+        (
+            0xE8,
+            picture_body(&p, 1, &[hq_slice_bytes(p.qindex, &y, &c, &c)]),
+        ),
+    ]);
+    stream.extend_from_slice(&build_units(&[
+        (0x00, sequence_header_body(2, 2, p.major_version)),
+        (
+            0xE8,
+            picture_body(&p, 2, &[hq_slice_bytes(p.qindex, &y, &c, &c)]),
+        ),
+    ]));
+
+    let mut dec = oxideav_vc2::make_decoder(&vc2_params()).expect("factory");
+    dec.send_packet(&packet(stream, 0)).unwrap();
+    let Frame::Video(first) = dec.receive_frame().expect("first frame") else {
+        panic!("expected a video frame");
+    };
+    assert_eq!(first.significant_bits(), Some(&[12u8, 10, 10][..]));
+    assert_eq!(first.image_planes().len(), 3);
+    let Frame::Video(second) = dec.receive_frame().expect("second frame") else {
+        panic!("expected a video frame");
+    };
+    assert_eq!(second.significant_bits(), None);
+    assert_eq!(second.planes.len(), 3);
+    assert_eq!(second.planes[0].stride, 2); // back on byte planes
+}
+
+#[test]
+fn fragmented_mixed_depth_picture_carries_the_record_once_complete() {
+    // Fragment reassembly (§14) composes with the side-channel: the
+    // record rides the single frame emitted when the last data fragment
+    // lands, not any intermediate state.
+    let p = PicParams {
+        major_version: 3,
+        slices_x: 2,
+        slices_y: 2,
+        ..PicParams::hq_depth0()
+    };
+    let c = [0i64; 4];
+    let slices: Vec<Vec<u8>> = (0..4)
+        .map(|i| hq_slice_bytes(p.qindex, &[i as i64; 4], &c, &c))
+        .collect();
+    let mixed = SignalRange::Custom {
+        luma_offset: 256,
+        luma_excursion: 4095,
+        color_diff_offset: 512,
+        color_diff_excursion: 1023,
+    };
+    let unit = |code: u8, body: Vec<u8>| -> Vec<u8> {
+        let mut out = Vec::new();
+        parse_info(&mut out, code, (13 + body.len()) as u32, 0);
+        out.extend_from_slice(&body);
+        out
+    };
+    let mut dec = oxideav_vc2::make_decoder(&vc2_params()).expect("factory");
+    let seq = sequence_header_body_full(4, 4, p.major_version, 0, mixed);
+    dec.send_packet(&packet(unit(0x00, seq), 1)).unwrap();
+    dec.send_packet(&packet(unit(0xEC, fragment_setup_body(&p, 9)), 2))
+        .unwrap();
+    dec.send_packet(&packet(
+        unit(0xEC, fragment_data_body(9, 0, 0, &slices[0..2])),
+        3,
+    ))
+    .unwrap();
+    assert!(matches!(dec.receive_frame(), Err(Error::NeedMore)));
+    dec.send_packet(&packet(
+        unit(0xEC, fragment_data_body(9, 0, 1, &slices[2..4])),
+        4,
+    ))
+    .unwrap();
+    let Frame::Video(v) = dec.receive_frame().expect("frame") else {
+        panic!("expected a video frame");
+    };
+    assert_eq!(v.significant_bits(), Some(&[12u8, 10, 10][..]));
+    assert_eq!(v.image_planes().len(), 3);
+    assert_eq!(v.image_planes()[0].stride, 8); // 4 samples * 2 bytes
+    assert!(matches!(dec.receive_frame(), Err(Error::NeedMore)));
 }
 
 #[test]

@@ -75,7 +75,22 @@ fn map_err(e: crate::Error) -> oxideav_core::Error {
 /// For pictures whose two component depths are equal and one of 8/10/12,
 /// the §15.5 code values are carried verbatim: the 8-bit formats hold
 /// bytes and the `P10Le`/`P12Le` formats keep the significant bits in
-/// the low end of each 16-bit word.
+/// the low end of each 16-bit word. No side-channel is attached — these
+/// frames are byte-for-byte what they always were.
+///
+/// Every other depth pair at or below 12 bits — mixed pairs such as
+/// 12-bit luma with 10-bit chroma, and the odd uniform depths (9, 11,
+/// or anything derived from a custom §11.4.9 excursion) that no exact
+/// format names — is **represented, not promoted**: the picture rides
+/// the natural common storage surface for its *deepest* component (the
+/// byte formats up to depth 8, `P10Le` up to 10, `P12Le` up to 12),
+/// each plane keeps its code values verbatim in the low bits of the
+/// storage word (LSB-anchored, the core partial-depth convention), and
+/// the frame carries a per-plane significant-bits side-channel
+/// (`VideoFrame::significant_bits`, one byte per plane) recording each
+/// plane's true depth. Full-scale for a plane with `b` significant bits
+/// is `(1 << b) - 1`; consumers that ignore the record simply see the
+/// surface format's documented depth, which never under-states a plane.
 ///
 /// Deeper pictures — any component depth in 13..=16, which includes the
 /// Table 10 preset-7/8 (16-bit) signal ranges and custom §11.4.9 ranges
@@ -88,15 +103,29 @@ fn map_err(e: crate::Error) -> oxideav_core::Error {
 /// consistently onto the surface: the zero level (`offset`) and nominal
 /// range (`excursion`) land at `value << shift`. Depth-16 planes shift
 /// by 0 — their code space already is the 16-bit surface.
+///
+/// The promoted >12-bit path attaches **no** significant-bits record,
+/// even for mixed pairs (e.g. 16-bit luma with 12-bit chroma): after
+/// the `16 - depth` promotion a plane's full-scale sits at the top of
+/// the 16-bit word, so all 16 bits genuinely carry signal in the
+/// LSB-anchored sense the side-channel is defined in — a record of the
+/// pre-promotion depths would mislabel full-scale as `(1 << depth) - 1`
+/// and misdescribe where the values sit. The promotion itself is the
+/// precision-faithful representation there, and the path stays
+/// byte-identical to previous releases.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SurfaceMapping {
     format: PixelFormat,
     /// Left shift promoting luma code values onto the output words
-    /// (0 for the verbatim 8/10/12-bit formats).
+    /// (0 for every verbatim, LSB-anchored surface).
     luma_shift: u32,
     /// Left shift promoting colour-difference code values onto the
     /// output words.
     chroma_shift: u32,
+    /// Per-plane significant-bits record (`[y, c1, c2]`) to attach to
+    /// the emitted frame, present exactly when some plane's true depth
+    /// differs from the surface format's documented depth.
+    significant_bits: Option<[u8; 3]>,
 }
 
 /// Pick the output surface for a decoded picture, or explain why none of
@@ -131,14 +160,35 @@ fn surface_mapping(pic: &DecodedPicture) -> oxideav_core::Result<SurfaceMapping>
             format,
             luma_shift: 0,
             chroma_shift: 0,
+            significant_bits: None,
         });
     }
     // Sequence-header validation bounds both excursions to 1..=65535, so
-    // depths are always 1..=16 here; anything the exact formats do not
-    // cover rides the 16-bit surface once a component needs more than 12
-    // bits. Shallower mismatched pairs (e.g. 10/8) stay unsupported
-    // rather than being silently promoted into a deeper format's
-    // significant bits.
+    // depths are always 1..=16 here (the defensive arm below is for
+    // out-of-contract callers only). Everything the exact formats do not
+    // name at or below 12 bits is represented, not promoted or refused:
+    // verbatim LSB-anchored code values on the deepest component's
+    // natural storage surface, plus a per-plane significant-bits record.
+    if (1..=12).contains(&deepest) {
+        let format = match (deepest, full, half_w) {
+            (..=8, true, _) => PixelFormat::Yuv444P,
+            (..=8, _, true) => PixelFormat::Yuv422P,
+            (..=8, _, _) => PixelFormat::Yuv420P,
+            (..=10, true, _) => PixelFormat::Yuv444P10Le,
+            (..=10, _, true) => PixelFormat::Yuv422P10Le,
+            (..=10, _, _) => PixelFormat::Yuv420P10Le,
+            (_, true, _) => PixelFormat::Yuv444P12Le,
+            (_, _, true) => PixelFormat::Yuv422P12Le,
+            _ => PixelFormat::Yuv420P12Le,
+        };
+        let c = pic.color_diff_depth as u8;
+        return Ok(SurfaceMapping {
+            format,
+            luma_shift: 0,
+            chroma_shift: 0,
+            significant_bits: Some([pic.luma_depth as u8, c, c]),
+        });
+    }
     if (13..=16).contains(&deepest) {
         let format = match (full, half_w) {
             (true, _) => PixelFormat::Yuv444P16Le,
@@ -149,6 +199,8 @@ fn surface_mapping(pic: &DecodedPicture) -> oxideav_core::Result<SurfaceMapping>
             format,
             luma_shift: 16 - pic.luma_depth,
             chroma_shift: 16 - pic.color_diff_depth,
+            // Promotion, not a record: see the SurfaceMapping docs.
+            significant_bits: None,
         });
     }
     Err(oxideav_core::Error::unsupported(format!(
@@ -201,13 +253,22 @@ fn to_frame(pic: &DecodedPicture, pts: Option<i64>) -> oxideav_core::Result<Fram
             pack_plane_words(samples, width, shift)
         }
     };
-    Ok(Frame::Video(VideoFrame {
+    let frame = VideoFrame {
         pts,
         planes: vec![
             pack(&pic.y, pic.luma_width, m.luma_shift),
             pack(&pic.c1, pic.color_diff_width, m.chroma_shift),
             pack(&pic.c2, pic.color_diff_width, m.chroma_shift),
         ],
+    };
+    Ok(Frame::Video(match m.significant_bits {
+        // Mixed / off-format depths: record each plane's true depth so
+        // consumers know full-scale is (1 << b) - 1, not the surface
+        // format's documented maximum. Uniform 8/10/12-bit pictures and
+        // the promoted >12-bit path attach nothing and stay
+        // byte-identical to previous releases.
+        Some(bits) => frame.with_significant_bits(bits.to_vec()),
+        None => frame,
     }))
 }
 
@@ -328,12 +389,73 @@ mod tests {
             f((4, 2, 16), (2, 1, 16)),
             Ok(PixelFormat::Yuv420P16Le)
         ));
-        // Mismatched depths at or below 12 bits stay unsupported.
-        assert!(f((4, 2, 10), (4, 2, 8)).is_err());
-        // As do equal depths with no exact format below the promotion cut.
-        assert!(f((4, 2, 9), (4, 2, 9)).is_err());
         // Unrepresentable chroma geometry is rejected at any depth.
         assert!(f((4, 2, 16), (3, 2, 16)).is_err());
+        assert!(f((4, 2, 10), (3, 2, 8)).is_err());
+        // Out-of-contract depths (the sequence header bounds real ones
+        // to 1..=16) hit the defensive rejection arm.
+        assert!(f((4, 2, 0), (4, 2, 0)).is_err());
+        assert!(f((4, 2, 17), (4, 2, 17)).is_err());
+    }
+
+    #[test]
+    fn mixed_shallow_depths_ride_the_deepest_surface_with_a_record() {
+        let f = |l, c| surface_mapping(&pic(l, c)).unwrap();
+        // The user-ruled headline case: 12-bit luma + 10-bit chroma on
+        // the P12 surface, verbatim words, record [12, 10, 10].
+        let m = f((4, 2, 12), (2, 2, 10));
+        assert_eq!(m.format, PixelFormat::Yuv422P12Le);
+        assert_eq!((m.luma_shift, m.chroma_shift), (0, 0));
+        assert_eq!(m.significant_bits, Some([12, 10, 10]));
+        // 10/8 (formerly refused): P10 surface, record [10, 8, 8].
+        let m = f((4, 2, 10), (4, 2, 8));
+        assert_eq!(m.format, PixelFormat::Yuv444P10Le);
+        assert_eq!(m.significant_bits, Some([10, 8, 8]));
+        // Deepest component at or below 8 bits: byte planes carry it.
+        let m = f((4, 2, 8), (2, 1, 6));
+        assert_eq!(m.format, PixelFormat::Yuv420P);
+        assert_eq!(m.significant_bits, Some([8, 6, 6]));
+        // Chroma may be the deeper component.
+        let m = f((4, 2, 10), (4, 2, 12));
+        assert_eq!(m.format, PixelFormat::Yuv444P12Le);
+        assert_eq!(m.significant_bits, Some([10, 12, 12]));
+        // Extreme spread still fits one surface.
+        let m = f((4, 2, 12), (2, 2, 1));
+        assert_eq!(m.format, PixelFormat::Yuv422P12Le);
+        assert_eq!(m.significant_bits, Some([12, 1, 1]));
+    }
+
+    #[test]
+    fn uniform_off_format_depths_are_represented_not_refused() {
+        // Equal depths with no exact format (9, 11, 7, ...) use the same
+        // representation: nearest not-shallower surface plus a record.
+        let f = |l, c| surface_mapping(&pic(l, c)).unwrap();
+        let m = f((4, 2, 9), (4, 2, 9));
+        assert_eq!(m.format, PixelFormat::Yuv444P10Le);
+        assert_eq!((m.luma_shift, m.chroma_shift), (0, 0));
+        assert_eq!(m.significant_bits, Some([9, 9, 9]));
+        let m = f((4, 2, 11), (2, 1, 11));
+        assert_eq!(m.format, PixelFormat::Yuv420P12Le);
+        assert_eq!(m.significant_bits, Some([11, 11, 11]));
+        let m = f((4, 2, 1), (4, 2, 1));
+        assert_eq!(m.format, PixelFormat::Yuv444P);
+        assert_eq!(m.significant_bits, Some([1, 1, 1]));
+    }
+
+    #[test]
+    fn exact_and_promoted_surfaces_attach_no_record() {
+        let f = |l, c| surface_mapping(&pic(l, c)).unwrap();
+        // Uniform 8/10/12: exact formats, no side-channel.
+        assert_eq!(f((4, 2, 8), (2, 1, 8)).significant_bits, None);
+        assert_eq!(f((4, 2, 10), (2, 2, 10)).significant_bits, None);
+        assert_eq!(f((4, 2, 12), (4, 2, 12)).significant_bits, None);
+        // The promoted >12-bit path — uniform or mixed — attaches no
+        // record either: promotion places full-scale at the top of the
+        // word, so an LSB-anchored depth record would misdescribe it.
+        assert_eq!(f((4, 2, 16), (2, 2, 16)).significant_bits, None);
+        assert_eq!(f((4, 2, 13), (4, 2, 13)).significant_bits, None);
+        assert_eq!(f((4, 2, 16), (2, 2, 12)).significant_bits, None);
+        assert_eq!(f((4, 2, 14), (2, 1, 10)).significant_bits, None);
     }
 
     #[test]
