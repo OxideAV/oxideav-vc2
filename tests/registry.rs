@@ -846,6 +846,57 @@ fn extradata_sequence_header_primes_the_decoder() {
 }
 
 #[test]
+fn low_delay_mixed_depth_picture_carries_the_record() {
+    // The low-delay slice path (§13.5.3) composes with the mixed-depth
+    // representation: an LD picture under a 12/10 custom range reaches
+    // the frame as verbatim P12-word planes matching the standalone
+    // decode exactly, with the [12, 10, 10] record attached.
+    use common::ld_slice_bytes;
+    let p = PicParams {
+        slices_x: 2,
+        slices_y: 1,
+        low_delay: true,
+        slice_bytes_numerator: 16,
+        slice_bytes_denominator: 1,
+        ..PicParams::hq_depth0()
+    };
+    let range = SignalRange::Custom {
+        luma_offset: 256,
+        luma_excursion: 3504,
+        color_diff_offset: 512,
+        color_diff_excursion: 896,
+    };
+    let c = [5i64, -5, 7, -7];
+    let left = [300i64, 150, -100, 20];
+    let right = [1200i64, -1300, 3, -3];
+    let slices = vec![
+        ld_slice_bytes(p.qindex, p.ld_slice_bytes_len(0), &left, &c, &c),
+        ld_slice_bytes(p.qindex, p.ld_slice_bytes_len(1), &right, &c, &c),
+    ];
+    let seq = sequence_header_body_full(4, 2, p.major_version, 0, range);
+    let stream = build_units(&[(0x00, seq), (0xC8, picture_body(&p, 5, &slices))]);
+
+    let pics = oxideav_vc2::decode_sequence(&stream).expect("standalone decode");
+    assert_eq!(pics[0].luma_depth, 12);
+    assert_eq!(pics[0].color_diff_depth, 10);
+
+    let mut dec = oxideav_vc2::make_decoder(&vc2_params()).expect("factory");
+    dec.send_packet(&packet(stream, 0)).unwrap();
+    let Frame::Video(v) = dec.receive_frame().expect("frame") else {
+        panic!("expected a video frame");
+    };
+    assert_eq!(v.significant_bits(), Some(&[12u8, 10, 10][..]));
+    assert_eq!(v.image_planes().len(), 3);
+    for (plane, samples) in v
+        .image_planes()
+        .iter()
+        .zip([&pics[0].y, &pics[0].c1, &pics[0].c2])
+    {
+        assert_eq!(le_words(plane), *samples);
+    }
+}
+
+#[test]
 fn corrupted_mixed_depth_streams_yield_well_formed_frames_or_errors() {
     // Flip every bit of a valid mixed 12/10 stream and push each mutant
     // through a fresh Decoder. Flips inside the §11.4.9 range fields
