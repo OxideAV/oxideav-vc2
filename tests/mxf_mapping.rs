@@ -154,3 +154,47 @@ fn sub_descriptor_scan_rejects_varying_scalars() {
     stream.extend(build_units(&[(0x00, seq_b), (0xE8, pic)]));
     assert!(mxf::sub_descriptor_values(&stream).is_err());
 }
+
+#[test]
+fn edit_unit_completeness_is_structural() {
+    use mxf::{edit_unit_is_complete_sequence, edit_units_are_complete_sequences};
+
+    // A whole sequence (header + picture + EOS) is a complete edit
+    // unit; Operating Mode A wraps exactly these.
+    let units = one_sequence(4, SignalRange::Preset(3));
+    let complete = build_units(&units);
+    assert!(edit_unit_is_complete_sequence(&complete));
+
+    // Missing EOS: not complete.
+    let mut no_eos = complete.clone();
+    no_eos.truncate(no_eos.len() - 13);
+    assert!(!edit_unit_is_complete_sequence(&no_eos));
+
+    // Trailing bytes after the EOS: not a *single* sequence in its
+    // entirety.
+    let mut trailing = complete.clone();
+    trailing.extend_from_slice(&complete);
+    assert!(!edit_unit_is_complete_sequence(
+        &trailing[..complete.len() + 4]
+    ));
+    // Two whole sequences in one edit unit are likewise rejected
+    // (the first EOS is not terminal).
+    assert!(!edit_unit_is_complete_sequence(&trailing));
+
+    // Not opening on a sequence header: rejected.
+    let p = PicParams::hq_depth0();
+    let y = [0i64; 64];
+    let pic = picture_body(&p, 0, &[hq_slice_bytes(p.qindex, &y, &y, &y)]);
+    let headerless = build_units(&[(0xE8, pic)]);
+    assert!(!edit_unit_is_complete_sequence(&headerless));
+
+    // The iterator form: all units complete -> true; any incomplete ->
+    // false; no units -> false.
+    assert!(edit_units_are_complete_sequences(
+        [complete.as_slice(), complete.as_slice()].into_iter()
+    ));
+    assert!(!edit_units_are_complete_sequences(
+        [complete.as_slice(), no_eos.as_slice()].into_iter()
+    ));
+    assert!(!edit_units_are_complete_sequences(std::iter::empty()));
+}

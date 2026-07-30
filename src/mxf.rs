@@ -407,6 +407,63 @@ pub fn sub_descriptor_values(data: &[u8]) -> Result<SubDescriptorValues> {
     })
 }
 
+/// Structural check that one edit unit is a *single complete VC-2
+/// sequence in its entirety* — the per-edit-unit property behind the
+/// `EditUnitsAreCompleteSequences` sub-descriptor boolean and Operating
+/// Mode A (§13: each edit unit shall comprise a single valid VC-2
+/// sequence in its entirety).
+///
+/// Checked structurally, without decoding pictures: the unit must open
+/// with a parse-info header carrying the sequence-header parse code
+/// (§13.1: each Operating-Mode-A edit unit begins with a parse-info
+/// header followed by a sequence header), every walked parse-info
+/// header must be intact, exactly one end-of-sequence unit may appear
+/// and it must terminate the edit unit's bytes. A unit whose data-unit
+/// payload cannot be skipped (zero `next_parse_offset` on a
+/// non-terminal unit) is not verifiable and reports `false`.
+pub fn edit_unit_is_complete_sequence(unit: &[u8]) -> bool {
+    let mut pos = 0usize;
+    let mut first = true;
+    while pos < unit.len() {
+        if unit.len() < pos + 13 || unit[pos..pos + 4] != crate::PARSE_INFO_PREFIX {
+            return false;
+        }
+        let parse_code = unit[pos + 4];
+        let kind = sequence::classify(parse_code);
+        if first {
+            if kind != DataUnit::SequenceHeader {
+                return false;
+            }
+            first = false;
+        }
+        if kind == DataUnit::EndOfSequence {
+            // Must be the terminal unit: exactly the last 13 bytes.
+            return pos + 13 == unit.len();
+        }
+        let next = u32::from_be_bytes([unit[pos + 5], unit[pos + 6], unit[pos + 7], unit[pos + 8]])
+            as usize;
+        if next < 13 {
+            return false;
+        }
+        pos += next;
+    }
+    // Ran out of bytes without an end-of-sequence unit.
+    false
+}
+
+/// Whether *every* edit unit of a wrapped stream is a single complete
+/// VC-2 sequence — the `EditUnitsAreCompleteSequences` sub-descriptor
+/// value (`true` also being one of the two Operating Mode A signals,
+/// §13.1, alongside identical sequence headers). Empty input reports
+/// `false`: there is nothing to assert completeness of.
+pub fn edit_units_are_complete_sequences<'a>(mut units: impl Iterator<Item = &'a [u8]>) -> bool {
+    let mut any = false;
+    units.all(|u| {
+        any = true;
+        edit_unit_is_complete_sequence(u)
+    }) && any
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

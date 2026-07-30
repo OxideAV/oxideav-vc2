@@ -7,6 +7,19 @@ on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Operating-Mode-A edit-unit helpers (`mxf`).**
+  `edit_unit_is_complete_sequence` structurally verifies the
+  per-edit-unit property behind the `EditUnitsAreCompleteSequences`
+  sub-descriptor boolean and ST 2042-4 §13 Operating Mode A: the unit
+  opens with a parse-info header carrying a sequence-header parse code,
+  every walked header is intact, and exactly one end-of-sequence unit
+  terminates the bytes (no trailing data, no second sequence);
+  `edit_units_are_complete_sequences` folds it over all edit units.
+  Together with the wrapped-stream scanner's `sequence_headers_identical`
+  this completes the derivable half of Table 3 — the boolean the
+  elementary stream alone could not answer now has a helper that takes
+  the edit-unit boundaries the wrapper knows.
+
 - **§12.2 picture-number rules in `conformance::check_stream`.**
   Picture numbers (from picture headers and setup-fragment headers)
   must increment by one within a sequence, wrapping past 2^32 − 1 back
