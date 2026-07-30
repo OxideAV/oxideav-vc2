@@ -29,9 +29,12 @@
 //!
 //! ## Container tags
 //!
-//! [`register`] claims the FourCC `BBCD` (the §10.5.1 parse-info
-//! prefix — the one identifier the staged specification grounds),
-//! backed by a confidence probe; see [`register`]'s docs.
+//! [`register`] claims every identifier the staged references ground:
+//! the FourCC `BBCD` (the §10.5.1 parse-info prefix), the Matroska
+//! CodecID [`MATROSKA_CODEC_ID`], the MP4/QuickTime sample-entry FourCC
+//! [`MP4_SAMPLE_ENTRY`] and the MP4 ObjectTypeIndication
+//! [`MP4_OBJECT_TYPE`] — all backed by one confidence probe; see
+//! [`register`]'s docs.
 
 use std::collections::VecDeque;
 
@@ -41,36 +44,102 @@ use oxideav_core::{
 };
 
 use crate::picture::DecodedPicture;
-use crate::sequence::SequenceDecoder;
+use crate::sequence::{classify, DataUnit, SequenceDecoder};
 use crate::PARSE_INFO_PREFIX;
 
 /// Registry identifier this crate claims.
 pub const CODEC_ID: &str = "vc2";
 
-/// Confidence probe backing the parse-info FourCC tag claim made in
-/// [`register`].
+/// Matroska `CodecID` for VC-2 essence. The staged container-registry
+/// references (`docs/video/vc2/vc2-signal-range-presets-and-container-registry.md`)
+/// record that the Matroska codec registry routes VC-2 under `V_DIRAC` —
+/// there is no separate VC-2 CodecID; the registry entry itself notes
+/// that the intra-only stream family became SMPTE VC-2. Framing rule
+/// from the registry: each Matroska frame is a whole *sequence* (not one
+/// picture), and initialization data (CodecPrivate) is empty — the
+/// in-band sequence header carries everything.
+pub const MATROSKA_CODEC_ID: &str = "V_DIRAC";
+
+/// MP4 / QuickTime sample-entry code for this stream family per the MP4
+/// registration-authority listing quoted in the staged container-registry
+/// references: `drac`. The registry has **no** VC-2-specific sample
+/// entry, so VC-2-in-MP4 rides the same code.
+pub const MP4_SAMPLE_ENTRY: [u8; 4] = *b"drac";
+
+/// MP4 ObjectTypeIndication registered for the same family (`0xA4`),
+/// from the same staged registry listing.
+pub const MP4_OBJECT_TYPE: u8 = 0xA4;
+
+/// Upper bound on parse-info headers walked by [`probe_vc2_stream`]:
+/// probes must stay O(1)-ish even on pathological packets.
+const PROBE_MAX_UNITS: usize = 256;
+
+/// Grade a byte blob (peeked packet or out-of-band stream-format blob)
+/// as VC-2 stream evidence.
 ///
-/// A packet, when the demuxer has peeked one, is decisive either way:
-/// the packet contract requires whole data units, and every data unit
-/// begins with the §10.5.1 parse-info prefix — so a matching first
-/// packet confirms the claim (1.0) and a non-matching one vetoes it
-/// (0.0). Without a packet, a container stream-format blob that itself
-/// starts with a parse-info header (the out-of-band sequence-header
-/// staging [`Vc2Decoder::new`] accepts) confirms; any other blob shape
-/// is *not* disqualifying, because the decoder tolerates and ignores
-/// unrecognized extradata. With no evidence beyond the tag itself the
-/// probe returns weak confidence, letting a hypothetical
-/// harder-evidenced claimant of the same tag win.
-fn probe_parse_info(ctx: &ProbeContext) -> Confidence {
-    match (ctx.packet, ctx.header) {
-        (Some(p), _) => {
-            if p.starts_with(&PARSE_INFO_PREFIX) {
-                1.0
-            } else {
-                0.0
-            }
+/// `0.0` — does not start with the §10.5.1 parse-info prefix, or a
+/// walked-to position where a header must sit holds something else:
+/// certainly not a VC-2 (or sibling-family) elementary stream.
+///
+/// `0.25` — parse-info framing is intact but some data unit carries a
+/// parse code outside ST 2042-1:2022 Table 4. A conforming VC-2 decoder
+/// would discard such units (§10.4.3), so this is not a veto, but the
+/// stream is likely the Dirac-era core syntax riding the same framing
+/// (shared prefix, shared container tags) — weak confidence lets a
+/// claimant that can actually decode those units win the tag.
+///
+/// `1.0` — every visible data unit (bounded by [`PROBE_MAX_UNITS`])
+/// carries a Table 4 parse code.
+fn stream_confidence(data: &[u8]) -> Confidence {
+    if !data.starts_with(&PARSE_INFO_PREFIX) {
+        return 0.0;
+    }
+    let mut pos = 0usize;
+    for _ in 0..PROBE_MAX_UNITS {
+        // A truncated trailing header is judged on the units already seen.
+        if data.len() < pos + 13 {
+            break;
         }
-        (None, Some(h)) if h.starts_with(&PARSE_INFO_PREFIX) => 1.0,
+        if data[pos..pos + 4] != PARSE_INFO_PREFIX {
+            return 0.0;
+        }
+        if classify(data[pos + 4]) == DataUnit::Reserved {
+            return 0.25;
+        }
+        let next = u32::from_be_bytes([data[pos + 5], data[pos + 6], data[pos + 7], data[pos + 8]])
+            as usize;
+        if next == 0 {
+            // Unknown length (§10.5.1 permits 0): stop walking.
+            break;
+        }
+        pos += next;
+        if pos >= data.len() {
+            break;
+        }
+    }
+    1.0
+}
+
+/// Confidence probe backing every tag claim made in [`register`].
+///
+/// A packet, when the demuxer has peeked one, is decisive: the packet
+/// contract requires whole data units, each beginning with the §10.5.1
+/// parse-info prefix — so the packet is graded by [`stream_confidence`]
+/// (a non-matching first packet vetoes the claim outright, and a
+/// BBCD-framed packet holding non-Table-4 parse codes — the Dirac-era
+/// core syntax that legitimately shares these container tags — resolves
+/// weakly so a claimant that decodes it can win). Without a packet, a
+/// container stream-format blob that itself starts with a parse-info
+/// header (the out-of-band sequence-header staging [`Vc2Decoder::new`]
+/// accepts) is graded the same way; any other blob shape is *not*
+/// disqualifying, because the decoder tolerates and ignores
+/// unrecognized extradata. With no evidence beyond the tag itself the
+/// probe returns weak confidence, letting a harder-evidenced claimant
+/// of the same tag win.
+fn probe_vc2_stream(ctx: &ProbeContext) -> Confidence {
+    match (ctx.packet, ctx.header) {
+        (Some(p), _) => stream_confidence(p),
+        (None, Some(h)) if h.starts_with(&PARSE_INFO_PREFIX) => stream_confidence(h),
         _ => 0.5,
     }
 }
@@ -380,17 +449,35 @@ pub fn make_decoder(params: &CodecParameters) -> oxideav_core::Result<Box<dyn De
 /// ## Container tags
 ///
 /// Per the workspace convention the codec crate declares the tags a
-/// container's `CodecResolver` may route to it. The one identifier the
-/// staged specification grounds is claimed as a FourCC: the parse-info
-/// prefix bytes `0x42 0x42 0x43 0x44` — the character string **"BBCD"**
-/// as expressed by ISO/IEC 646 (§10.5.1, NOTE 1) — which every VC-2
-/// data unit begins with, backed by a confidence probe (a peeked
-/// packet is decisive either way; a parse-info-shaped stream-format
-/// blob confirms; a bare tag match is weak evidence). ST 2042-1
-/// itself registers no container-scoped identifiers (no AVI/MP4 FourCC,
-/// Matroska CodecID, MP4 ObjectTypeIndication or MXF label; Annex C
-/// defers even level values to companion documents), so no other tag is
-/// declared until staged references ground one.
+/// container's `CodecResolver` may route to it. Four identifiers are
+/// grounded by staged references and claimed here, all sharing the
+/// [`probe_vc2_stream`] confidence probe:
+///
+/// * FourCC **`BBCD`** — the parse-info prefix bytes `0x42 0x42 0x43
+///   0x44`, the character string "BBCD" as expressed by ISO/IEC 646
+///   (ST 2042-1:2022 §10.5.1, NOTE 1), which every VC-2 data unit
+///   begins with.
+/// * Matroska CodecID **[`MATROSKA_CODEC_ID`]** (`V_DIRAC`) — the
+///   Matroska registry routes VC-2 under this ID; there is no `V_VC2`.
+///   Each Matroska frame holds a whole VC-2 *sequence* and CodecPrivate
+///   is empty, so a peeked packet is exactly a [`stream_confidence`]
+///   walk away from a decision.
+/// * FourCC **[`MP4_SAMPLE_ENTRY`]** (`drac`) and ObjectTypeIndication
+///   **[`MP4_OBJECT_TYPE`]** (`0xA4`) — the MP4 registration-authority
+///   codes for this stream family; no VC-2-specific code is registered,
+///   so VC-2-in-MP4 rides them.
+///
+/// ST 2042-1 itself registers no container-scoped identifiers (Annex C
+/// defers even level values to companion documents); the Matroska and
+/// MP4 rows above come from the container-registry references staged in
+/// `docs/video/vc2/vc2-signal-range-presets-and-container-registry.md`.
+/// The MXF identifiers ST 2042-4 defines are 16-byte SMPTE ULs, not
+/// FourCC/CodecID-shaped tags.
+///
+/// The shared wire heritage means a Dirac-era long-GOP stream can
+/// legitimately arrive under any of these tags; the probe grades a
+/// peeked packet by walking its parse codes, so such streams resolve
+/// here only weakly (0.25) and a claimant that decodes them can win.
 pub fn register(ctx: &mut RuntimeContext) {
     let mut caps = CodecCapabilities::video("vc2_sw");
     caps.intra_only = true; // every VC-2 picture decodes independently
@@ -400,8 +487,13 @@ pub fn register(ctx: &mut RuntimeContext) {
         CodecInfo::new(CodecId::new(CODEC_ID))
             .capabilities(caps)
             .decoder(make_decoder)
-            .tag(CodecTag::fourcc(&PARSE_INFO_PREFIX))
-            .probe(probe_parse_info),
+            .tags([
+                CodecTag::fourcc(&PARSE_INFO_PREFIX),
+                CodecTag::matroska(MATROSKA_CODEC_ID),
+                CodecTag::fourcc(&MP4_SAMPLE_ENTRY),
+                CodecTag::mp4_object_type(MP4_OBJECT_TYPE),
+            ])
+            .probe(probe_vc2_stream),
     );
 }
 
@@ -547,23 +639,73 @@ mod tests {
         // A peeked packet is decisive either way (whole-data-unit
         // contract), and its veto beats any header evidence.
         assert_eq!(
-            probe_parse_info(&ProbeContext::new(&tag).packet(&good)),
+            probe_vc2_stream(&ProbeContext::new(&tag).packet(&good)),
             1.0
         );
-        assert_eq!(probe_parse_info(&ProbeContext::new(&tag).packet(&bad)), 0.0);
+        assert_eq!(probe_vc2_stream(&ProbeContext::new(&tag).packet(&bad)), 0.0);
         assert_eq!(
-            probe_parse_info(&ProbeContext::new(&tag).packet(&bad).header(&good)),
+            probe_vc2_stream(&ProbeContext::new(&tag).packet(&bad).header(&good)),
             0.0
         );
         // Without a packet: a parse-info-shaped stream-format blob
         // confirms; other blob shapes are ignored, not disqualifying.
         assert_eq!(
-            probe_parse_info(&ProbeContext::new(&tag).header(&good)),
+            probe_vc2_stream(&ProbeContext::new(&tag).header(&good)),
             1.0
         );
-        assert_eq!(probe_parse_info(&ProbeContext::new(&tag).header(&bad)), 0.5);
+        assert_eq!(probe_vc2_stream(&ProbeContext::new(&tag).header(&bad)), 0.5);
         // Tag match alone is weak evidence.
-        assert_eq!(probe_parse_info(&ProbeContext::new(&tag)), 0.5);
+        assert_eq!(probe_vc2_stream(&ProbeContext::new(&tag)), 0.5);
+    }
+
+    /// A 13-byte parse-info header with the given code and next offset.
+    fn header_bytes(parse_code: u8, next: u32) -> Vec<u8> {
+        let mut v = PARSE_INFO_PREFIX.to_vec();
+        v.push(parse_code);
+        v.extend_from_slice(&next.to_be_bytes());
+        v.extend_from_slice(&0u32.to_be_bytes());
+        v
+    }
+
+    /// The probe walks parse codes: streams whose every data unit is a
+    /// Table 4 code confirm, while intact BBCD framing around parse
+    /// codes this version does not define (the Dirac-era core syntax
+    /// that shares these container tags) resolves weakly.
+    #[test]
+    fn probe_walks_parse_codes() {
+        let tag = CodecTag::matroska(MATROSKA_CODEC_ID);
+        // Sequence header unit (13 bytes, next_parse_offset 13) followed
+        // by an end-of-sequence unit: all Table 4 codes.
+        let mut all_vc2 = header_bytes(0x00, 13);
+        all_vc2.extend_from_slice(&header_bytes(0x10, 0));
+        assert_eq!(
+            probe_vc2_stream(&ProbeContext::new(&tag).packet(&all_vc2)),
+            1.0
+        );
+        // Same framing, but the second unit carries a parse code outside
+        // Table 4 (a long-GOP-era picture code shape): weak confidence,
+        // not a veto.
+        let mut mixed = header_bytes(0x00, 13);
+        mixed.extend_from_slice(&header_bytes(0x08, 0));
+        assert_eq!(
+            probe_vc2_stream(&ProbeContext::new(&tag).packet(&mixed)),
+            0.25
+        );
+        // A walked-to position that does not hold a parse-info header is
+        // a veto: the whole-data-unit packet contract is broken.
+        let mut torn = header_bytes(0x00, 13);
+        torn.extend_from_slice(&[0u8; 13]);
+        assert_eq!(
+            probe_vc2_stream(&ProbeContext::new(&tag).packet(&torn)),
+            0.0
+        );
+        // A truncated trailing header is judged on the units seen.
+        let mut trunc = header_bytes(0x00, 13);
+        trunc.extend_from_slice(&PARSE_INFO_PREFIX);
+        assert_eq!(
+            probe_vc2_stream(&ProbeContext::new(&tag).packet(&trunc)),
+            1.0
+        );
     }
 
     #[test]

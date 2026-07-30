@@ -48,9 +48,11 @@
 //! [`oxideav_core::RuntimeContext`] codec registry, and [`make_decoder`] is
 //! the direct factory. Packets carry whole VC-2 data units (the parse-info
 //! framing is the codec's own); fragmented pictures may span packets.
-//! `register` also claims the container tag the staged specification
-//! grounds — the FourCC `BBCD`, VC-2's own §10.5.1 parse-info prefix —
-//! with a confidence probe, so container `CodecResolver` lookups route
+//! `register` also claims the container tags staged references ground —
+//! the FourCC `BBCD` (VC-2's own §10.5.1 parse-info prefix), the
+//! Matroska CodecID `V_DIRAC`, and the MP4 sample-entry `drac` /
+//! ObjectTypeIndication `0xA4` — with a parse-code-walking confidence
+//! probe, so container `CodecResolver` lookups route
 //! matching streams here. Output rides exact planar formats where one
 //! exists; mixed or off-format ≤12-bit custom signal ranges decode
 //! LSB-anchored on the deepest component's surface with the core
@@ -99,7 +101,10 @@ pub fn decode_sequence(data: &[u8]) -> Result<Vec<DecodedPicture>> {
 pub mod decoder;
 
 #[cfg(feature = "registry")]
-pub use decoder::{make_decoder, register, Vc2Decoder, CODEC_ID};
+pub use decoder::{
+    make_decoder, register, Vc2Decoder, CODEC_ID, MATROSKA_CODEC_ID, MP4_OBJECT_TYPE,
+    MP4_SAMPLE_ENTRY,
+};
 
 #[cfg(feature = "registry")]
 oxideav_core::register!("vc2", decoder::register);

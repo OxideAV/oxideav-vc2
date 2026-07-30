@@ -65,7 +65,7 @@ fn registry_round_trip_via_register() {
 
 #[test]
 fn parse_info_fourcc_tag_resolves_to_vc2() {
-    // The one tag the staged spec grounds: the parse-info prefix bytes
+    // The tag the spec itself grounds: the parse-info prefix bytes
     // "BBCD" (section 10.5.1, NOTE 1), claimed as a FourCC so a
     // container's CodecResolver can route VC-2 essence tagged by its
     // stream magic.
@@ -108,10 +108,71 @@ fn parse_info_fourcc_tag_resolves_to_vc2() {
         "vc2"
     );
 
-    // Only the FourCC claim exists — no Matroska / WaveFormat / MP4-OTI
-    // identifier is declared (none is derivable from staged material).
+    // Unclaimed identifiers still resolve to nothing.
     let other = CodecTag::matroska("V_SYNTHETIC_TEST_ID");
     assert!(ctx.codecs.resolve_tag(&ProbeContext::new(&other)).is_none());
+}
+
+#[test]
+fn container_registry_tags_resolve_to_vc2() {
+    // The container identifiers grounded by the staged registry
+    // references (docs/video/vc2/vc2-signal-range-presets-and-
+    // container-registry.md): the Matroska CodecID V_DIRAC (VC-2 rides
+    // under it; there is no V_VC2), the MP4 sample-entry FourCC drac
+    // and the MP4 ObjectTypeIndication 0xA4.
+    let mut ctx = RuntimeContext::new();
+    oxideav_vc2::register(&mut ctx);
+
+    let mkv = CodecTag::matroska(oxideav_vc2::MATROSKA_CODEC_ID);
+    assert_eq!(
+        ctx.codecs
+            .resolve_tag(&ProbeContext::new(&mkv))
+            .expect("matroska")
+            .as_str(),
+        "vc2"
+    );
+
+    // FourCC lookups are case-insensitive by core normalization, so the
+    // on-wire lowercase sample-entry code and its uppercase form both
+    // resolve.
+    for fourcc in [&oxideav_vc2::MP4_SAMPLE_ENTRY, b"DRAC"] {
+        let tag = CodecTag::fourcc(fourcc);
+        assert_eq!(
+            ctx.codecs
+                .resolve_tag(&ProbeContext::new(&tag))
+                .expect("sample entry")
+                .as_str(),
+            "vc2"
+        );
+    }
+
+    let oti = CodecTag::mp4_object_type(oxideav_vc2::MP4_OBJECT_TYPE);
+    assert_eq!(
+        ctx.codecs
+            .resolve_tag(&ProbeContext::new(&oti))
+            .expect("object type")
+            .as_str(),
+        "vc2"
+    );
+
+    // Matroska framing rule from the registry entry: one frame == one
+    // whole sequence, CodecPrivate empty. A packet holding a complete
+    // sequence therefore confirms the V_DIRAC claim on its own.
+    let (stream, _) = simple_stream();
+    let pctx = ProbeContext::new(&mkv).packet(&stream);
+    assert_eq!(
+        ctx.codecs.resolve_tag(&pctx).expect("packet").as_str(),
+        "vc2"
+    );
+
+    // A BBCD-framed packet whose data units carry parse codes outside
+    // Table 4 (the long-GOP-era core syntax sharing these tags) only
+    // resolves weakly; with no stronger claimant registered it still
+    // resolves here, but a decoder for those units would out-rank it.
+    let mut dirac_era = Vec::new();
+    parse_info(&mut dirac_era, 0x08, 13, 0);
+    let pctx = ProbeContext::new(&mkv).packet(&dirac_era);
+    assert_eq!(ctx.codecs.resolve_tag(&pctx).expect("weak").as_str(), "vc2");
 }
 
 #[test]

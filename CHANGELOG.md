@@ -7,6 +7,28 @@ on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Container-tag declarations: Matroska `V_DIRAC`, MP4 `drac` /
+  ObjectTypeIndication `0xA4`.** The staged container-registry
+  references ground three more identifiers beyond the spec's own `BBCD`
+  parse-info FourCC, and `register(ctx)` now claims all four: the
+  Matroska codec registry routes VC-2 under `V_DIRAC` (there is no
+  `V_VC2`; each Matroska frame holds a whole VC-2 *sequence* and
+  CodecPrivate is empty), and the MP4 registration authority lists
+  sample-entry `drac` with ObjectTypeIndication `0xA4` for the stream
+  family with no VC-2-specific code, so VC-2-in-MP4 rides them. The
+  new `MATROSKA_CODEC_ID` / `MP4_SAMPLE_ENTRY` / `MP4_OBJECT_TYPE`
+  constants export the values. The confidence probe behind every claim
+  is upgraded from a prefix check to a bounded parse-code walk over the
+  peeked packet (or parse-info-shaped extradata blob): all-Table-4 data
+  units confirm (1.0), broken parse-info framing vetoes (0.0), and
+  intact `BBCD` framing around parse codes this version does not
+  define — the Dirac-era long-GOP core syntax that legitimately shares
+  these container tags — resolves weakly (0.25) so a claimant that can
+  decode those units wins the shared tag. Resolution and probe-grading
+  tests cover all four tags, case-insensitive FourCC lookup, the
+  whole-sequence Matroska packet shape, torn framing and truncated
+  trailing headers.
+
 - **Table 10 signal-range presets grounded against the staged verbatim
   transcription.** The newly staged
   `docs/video/vc2/vc2-signal-range-presets-and-container-registry.md`

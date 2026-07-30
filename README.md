@@ -58,21 +58,34 @@ LSB-anchored depth record would misdescribe the values).
 
 Per the workspace convention the codec crate declares the tags a
 container's `CodecResolver` may route to it; `register(ctx)` claims the
-one identifier the staged specification grounds:
+four identifiers staged references ground:
 
 - **FourCC `BBCD`** — the parse-info prefix bytes `0x42 0x42 0x43 0x44`,
   the character string "BBCD" as expressed by ISO/IEC 646 (§10.5.1,
-  NOTE 1), which every VC-2 data unit begins with. The claim carries a
-  probe: a peeked first packet is decisive either way (packets must hold
-  whole data units, each starting with the prefix), an out-of-band
-  sequence header staged as the container's stream-format blob confirms,
-  and a bare tag match resolves with weak confidence.
+  NOTE 1), which every VC-2 data unit begins with.
+- **Matroska CodecID `V_DIRAC`** — the Matroska codec registry routes
+  VC-2 under this ID (there is no `V_VC2`); each Matroska frame holds a
+  whole VC-2 *sequence* and CodecPrivate is empty.
+- **FourCC `drac`** and **MP4 ObjectTypeIndication `0xA4`** — the
+  MP4 registration-authority codes for this stream family; the registry
+  has no VC-2-specific sample entry, so VC-2-in-MP4 rides them.
 
-ST 2042-1:2022 registers no container-scoped identifiers of its own — no
-AVI/MP4 FourCC, Matroska CodecID, MP4 ObjectTypeIndication or MXF label
-appears in the standard (Annex C even defers level values to companion
-SMPTE documents) — so no other tag is declared until staged references
-ground one.
+All four share one confidence probe that walks a peeked packet's
+parse-info headers: a packet whose every data unit carries an
+ST 2042-1:2022 Table 4 parse code confirms (1.0), broken framing vetoes
+(0.0), and intact `BBCD` framing around parse codes this version does
+not define — the Dirac-era long-GOP core syntax that legitimately shares
+these container tags — resolves weakly (0.25) so a claimant that decodes
+those units can win the tag. An out-of-band sequence header staged as
+the container's stream-format blob is graded the same way; a bare tag
+match resolves with weak confidence.
+
+ST 2042-1:2022 registers no container-scoped identifiers of its own
+(Annex C defers even level values to companion SMPTE documents); the
+Matroska and MP4 rows come from the container-registry references staged
+in `docs/video/vc2/vc2-signal-range-presets-and-container-registry.md`.
+The MXF-side identifiers of ST 2042-4 are 16-byte SMPTE ULs rather than
+tags.
 
 ## Usage (standalone)
 
