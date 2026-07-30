@@ -43,6 +43,13 @@
 //! * **Picture decode** (§15) — the integer lifting IDWT (§15.4), pad
 //!   removal (§15.4.5), clipping (§15.5) and unsigned offsetting. See
 //!   [`wavelet`] and [`picture`].
+//! * **MXF mapping data** (SMPTE ST 2042-4:2018) — the essence
+//!   container / compression labels, picture-element key and VC-2
+//!   sub-descriptor ULs, the Annex B CDCI descriptor mappings (frame
+//!   layout, stored dimensions, ref levels, subsampling, colour
+//!   labels), and a wrapped-stream scanner deriving the sub-descriptor
+//!   values (distinct wavelet filters, sequence-header identity). See
+//!   [`mxf`].
 //! * **Profile / level conformance** — the Annex C profile constraints
 //!   (parse-code tables C.1/C.2, defined profile values) and the
 //!   SMPTE ST 2042-2:2017 generalized-level definitions (levels 0..=7:
@@ -83,6 +90,7 @@
 pub mod bitio;
 pub mod conformance;
 pub mod error;
+pub mod mxf;
 pub mod params;
 pub mod picture;
 pub mod quant;

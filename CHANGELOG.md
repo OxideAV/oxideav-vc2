@@ -7,6 +7,30 @@ on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **MXF mapping data (`mxf` module, SMPTE ST 2042-4:2018).** The
+  staged MXF-mapping standard's identifiers and descriptor mappings,
+  as plain data with no `oxideav-core` dependency: the Picture Element
+  Key (§8.1, byte 15 per Table 1: `10h` frame- / `11h` clip-wrapped),
+  the VC-2 Essence Container Label (§9, `01h`/`02h`), the Picture
+  Essence Compression Label (§10), the VC-2 Sub-Descriptor set key
+  (§11.1, byte 6 = `53h`) and all seven Table 3 item ULs including the
+  two booleans the earlier partial transcription omitted
+  (Sequence Headers Identical, Edit Units Are Complete Sequences —
+  Operating Mode A signals both True, §13). Annex B CDCI
+  picture-essence-descriptor mappings compute from a parsed
+  `SequenceHeader` (using the newly retained display metadata): frame
+  layout, stored dimensions (with the documented override of the
+  contradictory ST 377-1 G.2.7 note), field dominance, sample rate,
+  component depth, horizontal/vertical subsampling, black/white ref
+  levels, colour range, the recommended video line map, and the
+  transfer-characteristic / coding-equations / colour-primaries label
+  ULs for every Table 12/13/14 index. `mxf::sub_descriptor_values`
+  scans a wrapped stream (§7.1: the concatenated edit units are
+  themselves a VC-2 stream) to derive the sub-descriptor content —
+  version/profile/level scalars (rejecting streams that vary them,
+  §7.3), the distinct-wavelet-filters array (§11.1.1 requires reading
+  the whole stream) and byte-for-byte sequence-header identity.
+
 - **Profile / level conformance checking (`conformance` module).** The
   freshly staged SMPTE ST 2042-2:2017 level-definitions document and
   ST 2042-1's Annex C are now implemented as opt-in checks — the decode
