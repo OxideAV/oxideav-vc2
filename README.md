@@ -22,7 +22,7 @@ end-to-end on hand-assembled VC-2 streams.
 |------|------|-------|
 | Data coding (bit/byte I/O, exp-Golomb, bounded blocks) | Annex A | ✅ full, table-checked against A.1 / A.2 |
 | Stream structure + parse-info walk | §10 | ✅ Table 4 / Table 5 classification; aux/padding/reserved skipped via `next_parse_offset`; concatenated sequences (§10.3) |
-| Sequence header + Annex B base-format defaults | §11 | ✅ decode-critical fields; preset signal ranges (Table 10, all rows 1..=8 tested against the staged verbatim transcription) |
+| Sequence header + Annex B base-format defaults | §11 | ✅ complete Annex B parameter map (Tables B.1–B.3); full §11.4 retention incl. frame rate / aspect / clean area / colour spec (Tables 8, 9, 11–14); preset signal ranges (Table 10, all rows 1..=8 tested against the staged verbatim transcription); `SourceOverrides` custom-flag record |
 | `set_coding_parameters` (dimensions, video depth) | §11.6 | ✅ |
 | Transform parameters + extended (asymmetric) params | §12.4 | ✅ filter / depth / slice params / quant matrix |
 | Quantization (factor, offset, inverse-quant, DC prediction) | §13.3 / §13.4 | ✅ |

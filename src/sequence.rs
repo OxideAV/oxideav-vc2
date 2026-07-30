@@ -198,6 +198,15 @@ impl SequenceDecoder {
         self.fragment.is_some()
     }
 
+    /// The most recently parsed sequence header of the sequence being
+    /// walked, if any — the §11 parameter map (video parameters, source
+    /// overrides, derived coding parameters) a container needs to
+    /// describe the essence. Cleared by [`Self::reset`] and at each
+    /// end-of-sequence data unit.
+    pub fn sequence_header(&self) -> Option<&SequenceHeader> {
+        self.seq_header.as_ref()
+    }
+
     /// True after any data unit of a sequence has been walked and before
     /// the matching end-of-sequence data unit. A well-formed stream is not
     /// mid-sequence at its end (§10.4.1: each sequence starts and ends

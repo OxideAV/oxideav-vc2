@@ -7,6 +7,39 @@ on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Full source-parameter retention (§11.4.6–§11.4.10).** The display
+  metadata the parser used to read and discard is now kept:
+  `VideoParameters` carries the complete Annex B parameter map — frame
+  rate (numer/denom), pixel aspect ratio, clean area
+  (width/height/left/top) and the colour-specification index triple
+  (primaries / matrix / transfer function) — populated from the full
+  Tables B.1–B.3 defaults (every label, all 23 base formats) and
+  overridden through the newly transcribed preset tables: frame rates
+  (Table 8, 16 rows), pixel aspect ratios (Table 9, 6 rows) and colour
+  specifications (Table 11 with its Tables 12/13/14 index parts). The
+  new `SequenceHeader::source_overrides` record (`SourceOverrides`)
+  captures which §11.4 custom flags the stream set plus the indices it
+  signalled — the raw material ST 2042-2's generalized-level
+  constraints are phrased against — and
+  `SequenceDecoder::sequence_header()` exposes the live header so a
+  container can describe the essence (edit rate, display sizing,
+  descriptor labels). Normative "shall" bounds now enforced at parse
+  time: preset indices beyond Tables 8/9/11/12/13/14, zero custom
+  frame-rate / aspect-ratio terms, signalled clean areas extending
+  outside the frame (a *stale default* clean area under a shrunk custom
+  frame is retained as parsed — Annex B defaults track the default
+  frame and externally validated small-frame streams do this), and the
+  §11.5 reserved `picture_coding_mode > 1`. Two prose/table
+  discrepancies in the 2022 PDF are resolved in the tables' favour and
+  documented in code: §11.4.10.1 says the colour-spec index tops out
+  at 6 while Table 11 defines row 7 (HDR-TV HLG), and §11.4.10.4 says
+  the transfer-function index tops out at 4 while Table 14 defines
+  row 5 (Hybrid Log Gamma). Tests transcribe Tables 8/9/11 in full,
+  spot-check Annex B rows across all three tables (including the
+  format-7/8 inset clean areas), prove every Annex B default clean area
+  fits its frame, and exercise retention / override-recording /
+  rejection end-to-end through hand-built headers.
+
 - **Container-tag declarations: Matroska `V_DIRAC`, MP4 `drac` /
   ObjectTypeIndication `0xA4`.** The staged container-registry
   references ground three more identifiers beyond the spec's own `BBCD`

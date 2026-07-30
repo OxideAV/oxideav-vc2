@@ -25,9 +25,12 @@
 //!   enforced, and deferred DC prediction once the picture completes. The
 //!   stateful [`SequenceDecoder`] keeps a partially assembled picture
 //!   across [`SequenceDecoder::push`] calls for packetized input.
-//! * **Sequence header** (§11) — parse parameters, the Annex B base-format
-//!   defaults (decode-critical fields), source-parameter overrides, preset
-//!   signal ranges (Table 10) and `set_coding_parameters` (§11.6). See
+//! * **Sequence header** (§11) — parse parameters, the complete Annex B
+//!   base-format parameter map (Tables B.1–B.3), source-parameter
+//!   overrides with full retention of the §11.4.6–§11.4.10 display
+//!   metadata (preset frame rates, pixel aspect ratios, signal ranges,
+//!   colour specifications — Tables 8–14) plus a `SourceOverrides`
+//!   custom-flag record, and `set_coding_parameters` (§11.6). See
 //!   [`params`].
 //! * **Transform parameters** (§12.4) — wavelet filter / depth, the §12.4.4
 //!   extended (asymmetric) parameters, slice parameters and the §12.4.5.3
