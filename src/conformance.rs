@@ -80,6 +80,14 @@ pub enum Violation {
     /// ST 2042-2 §5.5: the sequence mixes picture data units and
     /// picture fragment data units.
     MixedPictureAndFragmentUnits { level: u64 },
+    /// ST 2042-1 §12.2: picture numbers within a sequence shall
+    /// increment by one for each successive picture (wrapping past
+    /// 2^32 - 1 back to zero).
+    PictureNumberDiscontinuity { expected: u32, found: u32 },
+    /// ST 2042-1 §12.2 / §11.5: with field coding, the earliest field
+    /// of each frame shall have an even picture number — so a
+    /// field-coded sequence must not open on an odd one.
+    FirstFieldOddPictureNumber { picture_number: u32 },
 }
 
 impl std::fmt::Display for Violation {
@@ -174,6 +182,18 @@ impl std::fmt::Display for Violation {
                 f,
                 "level-{level} sequence contains both picture and picture-fragment \
                  data units (ST 2042-2 clause 5.5)"
+            ),
+            Violation::PictureNumberDiscontinuity { expected, found } => write!(
+                f,
+                "picture number {found} where {expected} was expected — numbers \
+                 increment by one within a sequence, wrapping at 2^32 - 1 \
+                 (ST 2042-1 clause 12.2)"
+            ),
+            Violation::FirstFieldOddPictureNumber { picture_number } => write!(
+                f,
+                "field-coded sequence opens on odd picture number {picture_number} — \
+                 the earliest field of each frame has an even picture number \
+                 (ST 2042-1 clauses 11.5/12.2)"
             ),
         }
     }
@@ -386,6 +406,36 @@ pub fn check_transform_parameters(
     v
 }
 
+/// §12.2 picture-number bookkeeping for [`check_stream`]: numbers
+/// increment by one within a sequence (wrapping at `u32::MAX`), and a
+/// field-coded sequence must open on an even number (the earliest field
+/// of each frame is even). After a discontinuity the expectation
+/// resyncs to the observed number.
+fn track_picture_number(
+    seq: &SequenceHeader,
+    found: u32,
+    expected: &mut Option<u32>,
+    violations: &mut Vec<Violation>,
+) {
+    match *expected {
+        None => {
+            if seq.picture_coding_mode == 1 && found % 2 == 1 {
+                violations.push(Violation::FirstFieldOddPictureNumber {
+                    picture_number: found,
+                });
+            }
+        }
+        Some(want) if want != found => {
+            violations.push(Violation::PictureNumberDiscontinuity {
+                expected: want,
+                found,
+            });
+        }
+        Some(_) => {}
+    }
+    *expected = Some(found.wrapping_add(1));
+}
+
 /// Walk a whole stream collecting profile and level violations.
 ///
 /// Parses data-unit headers, sequence headers and per-picture /
@@ -401,6 +451,8 @@ pub fn check_stream(data: &[u8]) -> Result<Vec<Violation>> {
     let mut saw_picture = false;
     let mut saw_fragment = false;
     let mut mixed_flagged = false;
+    // §12.2 picture-number tracking, per sequence.
+    let mut expected_number: Option<u32> = None;
     let mut pos = 0usize;
     while pos < data.len() {
         let mut r = BitReader::new(&data[pos..]);
@@ -429,13 +481,15 @@ pub fn check_stream(data: &[u8]) -> Result<Vec<Violation>> {
                 saw_picture = false;
                 saw_fragment = false;
                 mixed_flagged = false;
+                expected_number = None;
             }
             DataUnit::Picture(kind) => {
                 saw_picture = true;
                 let s = seq.as_ref().ok_or(Error::MissingSequenceHeader)?;
                 r.byte_align();
-                let _picture_number = r.read_uint_lit(4); // picture_header (§12.2)
+                let picture_number = r.read_uint_lit(4) as u32; // picture_header (§12.2)
                 r.byte_align();
+                track_picture_number(s, picture_number, &mut expected_number, &mut violations);
                 let tp = transform::transform_parameters(&mut r, s, kind)?;
                 violations.extend(check_transform_parameters(s, &tp));
             }
@@ -444,6 +498,14 @@ pub fn check_stream(data: &[u8]) -> Result<Vec<Violation>> {
                 let s = seq.as_ref().ok_or(Error::MissingSequenceHeader)?;
                 let fh = sequence::fragment_header(&mut r)?;
                 if fh.fragment_slice_count == 0 {
+                    // A setup fragment opens a new picture; data
+                    // fragments continue it and carry the same number.
+                    track_picture_number(
+                        s,
+                        fh.picture_number,
+                        &mut expected_number,
+                        &mut violations,
+                    );
                     let tp = transform::transform_parameters(&mut r, s, kind)?;
                     violations.extend(check_transform_parameters(s, &tp));
                 }

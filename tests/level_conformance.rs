@@ -445,3 +445,73 @@ fn stream_checks_profiles_and_structure() {
         "{violations:?}"
     );
 }
+
+/// §12.2 picture-number rules through the stream walker: increment by
+/// one within a sequence (wrapping at 2^32 - 1), even first field for
+/// field coding, and a fresh count per sequence.
+#[test]
+fn picture_number_continuity_rules() {
+    let p = PicParams::hq_depth0();
+    let c = [0i64; 4];
+    let seq_body = || {
+        header_body(&HeaderSpec {
+            profile: 3,
+            base_video_format: 0,
+            frame_size: Some((2, 2)),
+            ..Default::default()
+        })
+    };
+    let pic = |n: u32| picture_body(&p, n, &[hq_slice_bytes(p.qindex, &c, &c, &c)]);
+
+    // 0, 1, 2: clean.
+    let stream = build_units(&[
+        (0x00, seq_body()),
+        (0xE8, pic(0)),
+        (0xE8, pic(1)),
+        (0xE8, pic(2)),
+    ]);
+    assert_eq!(check_stream(&stream).expect("walk"), vec![]);
+
+    // 0 then 2: a discontinuity, then resync so 3 passes.
+    let stream = build_units(&[
+        (0x00, seq_body()),
+        (0xE8, pic(0)),
+        (0xE8, pic(2)),
+        (0xE8, pic(3)),
+    ]);
+    assert_eq!(
+        check_stream(&stream).expect("walk"),
+        vec![Violation::PictureNumberDiscontinuity {
+            expected: 1,
+            found: 2
+        }]
+    );
+
+    // Wrapping past 2^32 - 1 back to zero is the mandated behaviour.
+    let stream = build_units(&[(0x00, seq_body()), (0xE8, pic(u32::MAX)), (0xE8, pic(0))]);
+    assert_eq!(check_stream(&stream).expect("walk"), vec![]);
+
+    // A new sequence restarts the count: no cross-sequence continuity.
+    let mut stream = build_units(&[(0x00, seq_body()), (0xE8, pic(5))]);
+    stream.extend(build_units(&[(0x00, seq_body()), (0xE8, pic(90))]));
+    assert_eq!(check_stream(&stream).expect("walk"), vec![]);
+
+    // Field coding must open on an even picture number.
+    let field_seq = || {
+        header_body(&HeaderSpec {
+            profile: 3,
+            base_video_format: 0,
+            frame_size: Some((2, 4)),
+            scan_format: Some(1),
+            picture_coding_mode: 1,
+            ..Default::default()
+        })
+    };
+    let stream = build_units(&[(0x00, field_seq()), (0xE8, pic(2)), (0xE8, pic(3))]);
+    assert_eq!(check_stream(&stream).expect("walk"), vec![]);
+    let stream = build_units(&[(0x00, field_seq()), (0xE8, pic(3))]);
+    assert_eq!(
+        check_stream(&stream).expect("walk"),
+        vec![Violation::FirstFieldOddPictureNumber { picture_number: 3 }]
+    );
+}

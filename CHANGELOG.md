@@ -7,6 +7,18 @@ on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **§12.2 picture-number rules in `conformance::check_stream`.**
+  Picture numbers (from picture headers and setup-fragment headers)
+  must increment by one within a sequence, wrapping past 2^32 − 1 back
+  to zero; a field-coded sequence must open on an even picture number
+  (the earliest field of each frame is even, §11.5/§12.2). Two new
+  violation variants report discontinuities (with resync so one gap
+  yields one violation) and odd-first-field openings; per the §12.2
+  NOTE about edited/spliced streams, the *decode* path deliberately
+  stays tolerant — these fire only in the opt-in checker. Cross-checked
+  by tests for clean runs, single gaps, the mandated wrap, per-sequence
+  restarts and both field-coded parities.
+
 - **`Vc2Decoder::sequence_header()` / `SequenceDecoder::sequence_header()`.**
   Both the standalone walker and the registry wrapper surface the live
   parsed §11 sequence header (video parameters with the full display
