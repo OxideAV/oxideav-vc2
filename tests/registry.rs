@@ -1011,3 +1011,30 @@ fn corrupted_mixed_depth_streams_yield_well_formed_frames_or_errors() {
         }
     }
 }
+
+#[test]
+fn wrapper_exposes_the_sequence_header() {
+    // Containers need the parsed §11 parameter map (edit rate, display
+    // sizing, descriptor labels); the wrapper surfaces the walker's
+    // live header. Extradata staging alone is enough to populate it.
+    let p = PicParams::hq_depth0();
+    let seq = sequence_header_body(2, 2, p.major_version);
+    let mut extradata = Vec::new();
+    parse_info(&mut extradata, 0x00, (13 + seq.len()) as u32, 0);
+    extradata.extend_from_slice(&seq);
+
+    let mut params = vc2_params();
+    params.extradata = extradata;
+    let dec = oxideav_vc2::Vc2Decoder::new(&params).expect("decoder");
+    let header = dec.sequence_header().expect("header staged");
+    assert_eq!(header.video_parameters.frame_width, 2);
+    // Base format 0 defaults ride along: 24/1.001 frame rate,
+    // square-ish custom-format metadata.
+    assert_eq!(header.video_parameters.frame_rate_numer, 24000);
+    assert_eq!(header.video_parameters.frame_rate_denom, 1001);
+    assert!(header.source_overrides.custom_dimensions_flag);
+
+    // A fresh decoder without staging has no header yet.
+    let dec = oxideav_vc2::Vc2Decoder::new(&vc2_params()).expect("decoder");
+    assert!(dec.sequence_header().is_none());
+}

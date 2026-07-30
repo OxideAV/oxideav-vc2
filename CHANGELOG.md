@@ -7,6 +7,14 @@ on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`Vc2Decoder::sequence_header()` / `SequenceDecoder::sequence_header()`.**
+  Both the standalone walker and the registry wrapper surface the live
+  parsed §11 sequence header (video parameters with the full display
+  metadata, source overrides, derived coding parameters), populated by
+  extradata staging or in-band headers and cleared on reset /
+  end-of-sequence — the hook a container needs to fill descriptors
+  (edit rate, display sizing, the `mxf` mappings).
+
 - **Hardening for the new parse surface.** A full-metadata stream —
   every §11.4 custom flag set, including custom frame rate, aspect
   ratio, clean area and a three-part colour-spec override — joins the

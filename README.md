@@ -32,11 +32,26 @@ end-to-end on hand-assembled VC-2 streams.
 | Picture fragments (setup/data, reassembly, constraints) | §14 | ✅ raster-order slice reassembly, deferred DC prediction, §14.1/§14.2 violations rejected; chunk-fed via `SequenceDecoder::push` |
 | IDWT lifting filters (all 7 wavelets) | §15.4.4 / Tables 16–22 | ✅ reversibility-tested (LeGall) |
 | Component IDWT + pad removal + clip + offset | §15 | ✅ |
-| `oxideav-core` `Decoder` (registry + direct factory) | — | ✅ `register(ctx)` + `make_decoder`; 8/10/12/16-bit planar YUV output (Table 10 presets 7/8 and >12-bit custom ranges ride the full-width 16-bit formats); mixed / off-format ≤12-bit custom ranges decode LSB-anchored on the deepest component's surface with a per-plane significant-bits side-channel; fragments may span packets |
+| `oxideav-core` `Decoder` (registry + direct factory) | — | ✅ `register(ctx)` + `make_decoder`; `Vc2Decoder::sequence_header()` surfaces the live §11 parameter map; 8/10/12/16-bit planar YUV output (Table 10 presets 7/8 and >12-bit custom ranges ride the full-width 16-bit formats); mixed / off-format ≤12-bit custom ranges decode LSB-anchored on the deepest component's surface with a per-plane significant-bits side-channel; fragments may span packets |
 | Hostile-input hardening | — | ✅ truncation → `UnexpectedEof` at every cut point (8-bit, 16-bit and mixed-depth streams); saturating VLC/quant math; documented caps on depth / area / slice counts / signal offsets+excursions; bit-flip + garbage fuzz-lite in CI, including a wrapper-level sweep asserting every emitted frame is well-formed (3 image planes, in-contract significant-bits record) |
 | MXF mapping data | ST 2042-4 | ✅ `mxf` module: essence container / compression labels, picture-element key, sub-descriptor key + all 7 item ULs; Annex B CDCI descriptor mappings (frame layout, stored dims, ref levels, subsampling, colour label ULs); wrapped-stream sub-descriptor scanner (distinct wavelet filters, header identity, constant version/profile/level) |
 | Profile / level conformance checks | Annex C + ST 2042-2 | ✅ opt-in `conformance` module: profile values + per-profile parse-code tables (C.1/C.2); generalized levels 0..=7 — base-format coverage, §5.3 custom-flag rules incl. the format-7 dimension / progressive-relabel / Level-4 48 fps carve-outs, §5.4 picture bounds (wavelet ≤ 4, depth ≤ 4, no asym flags at v3, equal DC per slice, quant values ≤ 127), §5.5 no mixed picture+fragment units; whole-stream walker |
 | Conformance fixtures | — | ✅ 8-case pinned matrix (`tests/data/`, staged under `docs/video/vc2/fixtures/`): 10/12-bit cases bit-exact vs an independent black-box validator across all samplings + 3 wavelets; 16-bit presets 7/8 and the mixed 12/10 custom-range case pinned as self-consistent references (probe-verified: the validator's envelope excludes signal-range presets 5..=8 **and** every custom index-0 range) |
+
+### Conformance posture (RP 2042-3)
+
+The staged SMPTE RP 2042-3:2022 defines conformance *procedurally* — it
+adds no bitstream provisions beyond ST 2042-1 (its §5.1 says so
+explicitly): a bitstream is conformant when a validator finds no
+errors, and a decoder is conformant for given bitstreams when its
+decoded pictures match the reference decoding, repeated across picture
+formats and coding options within the decoder's stated operational
+parameters. The crate's pinned fixture matrix implements exactly that
+decoder procedure, using an independent black-box validator binary as
+the reference decoder wherever its envelope allows (10/12-bit
+video-range presets across all samplings and three wavelets) and
+spec-grounded self-consistent pins where it refuses input the standard
+permits (presets 5..=8, custom index-0 ranges).
 
 ### Mixed and off-format bit depths
 

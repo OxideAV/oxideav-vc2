@@ -174,6 +174,19 @@ impl Vc2Decoder {
             flushed: false,
         })
     }
+
+    /// The most recently parsed sequence header, if any — the §11
+    /// parameter map (video parameters with the full §11.4 display
+    /// metadata, source overrides, derived coding parameters) of the
+    /// sequence currently being decoded. Available as soon as
+    /// extradata staging or the first pushed packet has carried a
+    /// sequence header; cleared by [`Decoder::reset`] and at each
+    /// end-of-sequence data unit. Containers use this to describe the
+    /// essence (edit rate, display sizing, descriptor labels — see
+    /// [`crate::mxf`]).
+    pub fn sequence_header(&self) -> Option<&crate::params::SequenceHeader> {
+        self.walker.sequence_header()
+    }
 }
 
 /// Map a crate error onto the shared error type.
