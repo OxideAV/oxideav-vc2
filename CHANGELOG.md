@@ -7,6 +7,27 @@ on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Table 10 signal-range presets grounded against the staged verbatim
+  transcription.** The newly staged
+  `docs/video/vc2/vc2-signal-range-presets-and-container-registry.md`
+  transcribes ST 2042-1:2022 Table 10 ("Preset signal ranges", §11.4.9,
+  page 59) row for row, hash-anchored to the staged PDF, together with
+  the "index shall lie in the range 0 to 8" prose and the §11.6.3 depth
+  derivation. The crate's `preset_signal_range` table — including the
+  long-questioned full-range and 16-bit rows 5..=8 — now carries
+  transcription-pinned unit tests: all eight rows, the 0/9/u64::MAX
+  index rejections, the derived depth ladder (8/8/10/12/10/12/16/16),
+  the exact power-of-two scaling between the video-range rows
+  (preset 3 = preset 2 × 4, preset 4 = preset 3 × 4, preset 7 =
+  preset 4 × 16), and the zero-offset/mid-scale-chroma shape shared by
+  the full-range rows. The staged doc also records that the Dirac-era
+  specification defines only presets 1..=4 (index bounded at 4), so
+  rows 5..=8 are a VC-2-only addition — noted on the lookup for tag
+  and probe work. The preset-7/8 conformance fixtures keep their pinned
+  decode outputs (every probed validator still refuses signal-range
+  indices 5..=8 at the sequence header), but the values they are built
+  from are now normatively grounded rather than self-pinned.
+
 - **Container-tag declaration: FourCC `BBCD`.** `register(ctx)` now
   claims the one wire identifier the staged specification grounds — the
   parse-info prefix bytes `0x42 0x42 0x43 0x44`, the character string

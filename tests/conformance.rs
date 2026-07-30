@@ -19,7 +19,12 @@
 //! self-consistent references riding the very code path the validated
 //! cases exercise (the only depth-dependent deltas are the §11.6.3
 //! depth derivation and the §15.5 clip/offset constants, unit-tested
-//! against the spec formulas).
+//! against the spec formulas). The preset *values* themselves are no
+//! longer self-derived in any sense: the staged registry/preset doc
+//! (`docs/video/vc2/vc2-signal-range-presets-and-container-registry.md`)
+//! carries a verbatim, hash-anchored transcription of Table 10 rows
+//! 1..=8 plus the §11.4.9 index-range prose, and the whole table is
+//! unit-tested against it row for row (`src/params.rs`).
 //!
 //! The r418 mixed 12/10 custom-range case is in the same boat: probe
 //! experiments show the validator refuses **every** custom (index 0)

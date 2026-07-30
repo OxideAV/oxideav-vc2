@@ -56,8 +56,19 @@ pub struct VideoParameters {
     pub color_diff_excursion: u64,
 }
 
-/// `preset_signal_range(index)` — Table 10. Returns
+/// `preset_signal_range(index)` — Table 10 ("Preset signal ranges",
+/// §11.4.9). Returns
 /// (luma_offset, luma_excursion, color_diff_offset, color_diff_excursion).
+///
+/// All eight rows are transcribed from the normative table (see also the
+/// staged verbatim transcription in
+/// `docs/video/vc2/vc2-signal-range-presets-and-container-registry.md`).
+/// §11.4.9: "The value of `index` shall lie in the range 0 to 8" — index 0
+/// is the custom (explicitly coded) range handled by [`signal_range`], so
+/// this lookup accepts exactly 1..=8. Presets 5..=8 (the full-range and
+/// 16-bit rows) are an ST 2042-1 addition: the Dirac-era specification
+/// defines only indices 1..=4 and bounds `index` at 4, so those rows never
+/// appear in a legacy Dirac bitstream.
 fn preset_signal_range(index: u64) -> Result<(u64, u64, u64, u64)> {
     Ok(match index {
         1 => (0, 255, 128, 255),
@@ -373,6 +384,91 @@ mod tests {
         assert_eq!(intlog2(256), 8);
         // 8-bit excursion 255 -> depth = intlog2(256) = 8.
         assert_eq!(intlog2(255 + 1), 8);
+    }
+
+    /// Table 10 ("Preset signal ranges") in full, row for row, against the
+    /// staged verbatim transcription
+    /// (`docs/video/vc2/vc2-signal-range-presets-and-container-registry.md`,
+    /// itself hash-anchored to the ST 2042-1:2022 PDF page 59).
+    #[test]
+    fn table10_preset_signal_ranges_match_the_staged_transcription() {
+        // (index, luma_offset, luma_excursion,
+        //  color_diff_offset, color_diff_excursion)
+        const TABLE_10: [(u64, u64, u64, u64, u64); 8] = [
+            (1, 0, 255, 128, 255),          // 8-bit Full Range
+            (2, 16, 219, 128, 224),         // 8-bit Video
+            (3, 64, 876, 512, 896),         // 10-bit Video
+            (4, 256, 3504, 2048, 3584),     // 12-bit Video
+            (5, 0, 1023, 512, 1023),        // 10-bit Full Range
+            (6, 0, 4095, 2048, 4095),       // 12-bit Full Range
+            (7, 4096, 56064, 32768, 57344), // 16-bit Video
+            (8, 0, 65535, 32768, 65535),    // 16-bit Full Range
+        ];
+        for &(index, lo, le, co, ce) in &TABLE_10 {
+            assert_eq!(
+                preset_signal_range(index).unwrap(),
+                (lo, le, co, ce),
+                "Table 10 row {index}"
+            );
+        }
+        // §11.4.9: index shall lie in 0..=8; 0 is the custom-range arm of
+        // signal_range(), never a preset lookup, and anything above 8 is
+        // invalid.
+        assert!(preset_signal_range(0).is_err());
+        assert!(preset_signal_range(9).is_err());
+        assert!(preset_signal_range(u64::MAX).is_err());
+    }
+
+    /// §11.6.3 depth derivation over every Table 10 preset: the video-range
+    /// ladder presets 2/3/4/7 scale by exact powers of two (219*4=876,
+    /// 876*4=3504, 3504*16=56064 — the staged transcription's consistency
+    /// note), and all four 16-bit-capable values derive depth 16.
+    #[test]
+    fn table10_presets_derive_the_documented_depths() {
+        const DEPTHS: [(u64, u32, u32); 8] = [
+            (1, 8, 8),
+            (2, 8, 8),
+            (3, 10, 10),
+            (4, 12, 12),
+            (5, 10, 10),
+            (6, 12, 12),
+            (7, 16, 16),
+            (8, 16, 16),
+        ];
+        for &(index, luma_depth, color_diff_depth) in &DEPTHS {
+            let (_, le, _, ce) = preset_signal_range(index).unwrap();
+            assert_eq!(intlog2(le + 1), luma_depth, "preset {index} luma depth");
+            assert_eq!(
+                intlog2(ce + 1),
+                color_diff_depth,
+                "preset {index} color-diff depth"
+            );
+        }
+        // The video-range ladder is exact power-of-two scaling of the 8-bit
+        // row — the same `x << (depth - 8)` relationship the >12-bit output
+        // promotion path relies on.
+        let p2 = preset_signal_range(2).unwrap();
+        let p3 = preset_signal_range(3).unwrap();
+        let p4 = preset_signal_range(4).unwrap();
+        let p7 = preset_signal_range(7).unwrap();
+        assert_eq!((p2.0 * 4, p2.1 * 4, p2.2 * 4, p2.3 * 4), p3);
+        assert_eq!((p3.0 * 4, p3.1 * 4, p3.2 * 4, p3.3 * 4), p4);
+        assert_eq!((p4.0 * 16, p4.1 * 16, p4.2 * 16, p4.3 * 16), p7);
+        assert_eq!((p2.1 * 256, p2.3 * 256), (p7.1, p7.3));
+    }
+
+    /// Full-range presets keep the colour-difference zero point at
+    /// mid-scale while the luma offset stays 0 — the shape that separates
+    /// rows 1/5/6/8 from the video-range rows.
+    #[test]
+    fn table10_full_range_presets_are_zero_offset_mid_chroma() {
+        for index in [1u64, 5, 6, 8] {
+            let (lo, le, co, _) = preset_signal_range(index).unwrap();
+            assert_eq!(lo, 0, "preset {index} luma offset");
+            // Mid-scale chroma zero point: 2^(depth-1).
+            let depth = intlog2(le + 1);
+            assert_eq!(co, 1 << (depth - 1), "preset {index} chroma offset");
+        }
     }
 
     #[test]
