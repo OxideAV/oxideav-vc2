@@ -376,3 +376,171 @@ pub fn fragment_data_body(
     }
     out
 }
+
+/// Full-control sequence-header builder options (§11.1): parse
+/// parameters, base format, every §11.4 override and the picture
+/// coding mode. `Default` is an all-defaults major-version-2 header on
+/// base format 0.
+#[derive(Clone, Copy)]
+pub struct HeaderSpec {
+    pub major_version: u64,
+    pub profile: u64,
+    pub level: u64,
+    pub base_video_format: u64,
+    /// `Some((w, h))` sets `custom_dimensions_flag`.
+    pub frame_size: Option<(u64, u64)>,
+    /// `Some(index)` sets the chroma-format flag with a Table 7 index.
+    pub color_diff_index: Option<u64>,
+    /// `Some(source_sampling)` sets the scan-format flag.
+    pub scan_format: Option<u64>,
+    /// `Some(index)` sets the frame-rate flag with a Table 8 preset;
+    /// use `frame_rate_custom` for index 0 + explicit values.
+    pub frame_rate_preset: Option<u64>,
+    pub frame_rate_custom: Option<(u64, u64)>,
+    pub pixel_aspect_preset: Option<u64>,
+    pub pixel_aspect_custom: Option<(u64, u64)>,
+    /// `Some((cw, ch, left, top))` sets `custom_clean_area_flag`.
+    pub clean_area: Option<(u64, u64, u64, u64)>,
+    /// `Some(index)` sets the signal-range flag with a Table 10 preset.
+    pub signal_range_preset: Option<u64>,
+    /// Table 11 preset index for the colour spec.
+    pub color_spec_preset: Option<u64>,
+    /// Per-part overrides riding colour-spec index 0:
+    /// (primaries, matrix, transfer), each optional.
+    pub color_spec_custom: Option<(Option<u64>, Option<u64>, Option<u64>)>,
+    pub picture_coding_mode: u64,
+}
+
+impl Default for HeaderSpec {
+    fn default() -> Self {
+        HeaderSpec {
+            major_version: 2,
+            profile: 0,
+            level: 0,
+            base_video_format: 0,
+            frame_size: None,
+            color_diff_index: None,
+            scan_format: None,
+            frame_rate_preset: None,
+            frame_rate_custom: None,
+            pixel_aspect_preset: None,
+            pixel_aspect_custom: None,
+            clean_area: None,
+            signal_range_preset: None,
+            color_spec_preset: None,
+            color_spec_custom: None,
+            picture_coding_mode: 0,
+        }
+    }
+}
+
+/// Build a sequence-header data-unit body per §11.1 from a
+/// [`HeaderSpec`].
+pub fn header_body(spec: &HeaderSpec) -> Vec<u8> {
+    let mut w = BitWriter::default();
+    w.put_uint(spec.major_version);
+    w.put_uint(0); // minor_version
+    w.put_uint(spec.profile);
+    w.put_uint(spec.level);
+    w.put_uint(spec.base_video_format);
+    // frame_size (§11.4.3).
+    match spec.frame_size {
+        Some((width, height)) => {
+            w.put_bool(true);
+            w.put_uint(width);
+            w.put_uint(height);
+        }
+        None => w.put_bool(false),
+    }
+    // color_diff_sampling_format (§11.4.4).
+    match spec.color_diff_index {
+        Some(index) => {
+            w.put_bool(true);
+            w.put_uint(index);
+        }
+        None => w.put_bool(false),
+    }
+    // scan_format (§11.4.5).
+    match spec.scan_format {
+        Some(sampling) => {
+            w.put_bool(true);
+            w.put_uint(sampling);
+        }
+        None => w.put_bool(false),
+    }
+    // frame_rate (§11.4.6).
+    match (spec.frame_rate_preset, spec.frame_rate_custom) {
+        (Some(index), _) => {
+            w.put_bool(true);
+            w.put_uint(index);
+        }
+        (None, Some((numer, denom))) => {
+            w.put_bool(true);
+            w.put_uint(0);
+            w.put_uint(numer);
+            w.put_uint(denom);
+        }
+        (None, None) => w.put_bool(false),
+    }
+    // pixel_aspect_ratio (§11.4.7).
+    match (spec.pixel_aspect_preset, spec.pixel_aspect_custom) {
+        (Some(index), _) => {
+            w.put_bool(true);
+            w.put_uint(index);
+        }
+        (None, Some((numer, denom))) => {
+            w.put_bool(true);
+            w.put_uint(0);
+            w.put_uint(numer);
+            w.put_uint(denom);
+        }
+        (None, None) => w.put_bool(false),
+    }
+    // clean_area (§11.4.8).
+    match spec.clean_area {
+        Some((cw, ch, left, top)) => {
+            w.put_bool(true);
+            w.put_uint(cw);
+            w.put_uint(ch);
+            w.put_uint(left);
+            w.put_uint(top);
+        }
+        None => w.put_bool(false),
+    }
+    // signal_range (§11.4.9).
+    match spec.signal_range_preset {
+        Some(index) => {
+            w.put_bool(true);
+            w.put_uint(index);
+        }
+        None => w.put_bool(false),
+    }
+    // color_spec (§11.4.10).
+    match (spec.color_spec_preset, spec.color_spec_custom) {
+        (Some(index), _) => {
+            w.put_bool(true);
+            w.put_uint(index);
+            if index == 0 {
+                w.put_bool(false);
+                w.put_bool(false);
+                w.put_bool(false);
+            }
+        }
+        (None, Some((primaries, matrix, transfer))) => {
+            w.put_bool(true);
+            w.put_uint(0);
+            for part in [primaries, matrix, transfer] {
+                match part {
+                    Some(idx) => {
+                        w.put_bool(true);
+                        w.put_uint(idx);
+                    }
+                    None => w.put_bool(false),
+                }
+            }
+        }
+        (None, None) => w.put_bool(false),
+    }
+    w.put_uint(spec.picture_coding_mode);
+    w.into_bytes()
+}

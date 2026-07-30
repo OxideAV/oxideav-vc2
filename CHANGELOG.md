@@ -7,6 +7,34 @@ on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Profile / level conformance checking (`conformance` module).** The
+  freshly staged SMPTE ST 2042-2:2017 level-definitions document and
+  ST 2042-1's Annex C are now implemented as opt-in checks — the decode
+  path stays permissive. `check_sequence_header` grades the Annex C
+  profile value (0 = low delay, 3 = high quality; 1/2 tolerated only
+  below major version 3; the rest reserved) and, for generalized
+  levels 1..=7, the ST 2042-2 §5.2.2 base-format coverage
+  (`level_base_video_formats` exposes the sets) plus every §5.3
+  custom-flag rule with its documented carve-outs: the base-format-7
+  dimension override bounded to 720 × 480..=486, the
+  interlaced-to-progressive relabelling for formats 7/8/11/12/22, the
+  Level-4 48 fps (Table 8 index 11) frame-rate exception, and the
+  picture-coding-mode ↔ source-sampling correspondence. Reserved
+  generalized levels 8..=63 are flagged; level 0 and specialized
+  levels ≥ 64 (constrained by their own application specifications)
+  grade violation-free. `check_transform_parameters` covers §5.4 —
+  wavelet index ≤ 4, transform depth ≤ 4, asymmetric-transform flags
+  False at major version 3 (the §12.4.4 flags are now retained on
+  `TransformParameters`), equal DC-coefficient counts per slice
+  (divisibility of every component's §13.2.3 DC-band extents), and
+  quantization-matrix values in 0..=127. `check_stream` walks a whole
+  stream — data-unit headers, sequence headers, per-picture /
+  per-setup-fragment transform parameters, payloads skipped via
+  `next_parse_offset` — adding the Annex C per-profile parse-code
+  tables (C.1/C.2) and the §5.5 no-mixed-picture-and-fragment-units
+  rule. Every `Violation` variant names its clause and pretty-prints
+  the rule.
+
 - **Full source-parameter retention (§11.4.6–§11.4.10).** The display
   metadata the parser used to read and discard is now kept:
   `VideoParameters` carries the complete Annex B parameter map — frame

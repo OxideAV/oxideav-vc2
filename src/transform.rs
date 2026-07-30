@@ -46,6 +46,14 @@ pub struct TransformParameters {
     pub dwt_depth: u64,
     pub wavelet_index_ho: u64,
     pub dwt_depth_ho: u64,
+    /// §12.4.4 `asym_transform_index_flag` as read from the stream
+    /// (always `false` below major version 3, where the extended
+    /// parameters do not exist). ST 2042-2 §5.4 requires it to be
+    /// `False` in major-version-3 sequences claiming levels 1..=7.
+    pub asym_transform_index_flag: bool,
+    /// §12.4.4 `asym_transform_flag` as read (see
+    /// [`Self::asym_transform_index_flag`]).
+    pub asym_transform_flag: bool,
     pub slices_x: u64,
     pub slices_y: u64,
     // Low delay
@@ -101,12 +109,16 @@ pub fn transform_parameters(
     let dwt_depth = r.read_uint();
     let mut wavelet_index_ho = wavelet_index;
     let mut dwt_depth_ho = 0;
+    let mut asym_transform_index_flag = false;
+    let mut asym_transform_flag = false;
     if seq.parse_parameters.major_version >= 3 {
         // extended_transform_parameters() (§12.4.4).
-        if r.read_bool() {
+        asym_transform_index_flag = r.read_bool();
+        if asym_transform_index_flag {
             wavelet_index_ho = r.read_uint();
         }
-        if r.read_bool() {
+        asym_transform_flag = r.read_bool();
+        if asym_transform_flag {
             dwt_depth_ho = r.read_uint();
         }
     }
@@ -212,6 +224,8 @@ pub fn transform_parameters(
         dwt_depth,
         wavelet_index_ho,
         dwt_depth_ho,
+        asym_transform_index_flag,
+        asym_transform_flag,
         slices_x,
         slices_y,
         slice_bytes_numerator,
@@ -710,6 +724,8 @@ mod tests {
             dwt_depth,
             wavelet_index_ho: 1,
             dwt_depth_ho,
+            asym_transform_index_flag: false,
+            asym_transform_flag: false,
             slices_x: 2,
             slices_y: 2,
             slice_bytes_numerator: num,

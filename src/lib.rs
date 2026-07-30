@@ -43,6 +43,14 @@
 //! * **Picture decode** (§15) — the integer lifting IDWT (§15.4), pad
 //!   removal (§15.4.5), clipping (§15.5) and unsigned offsetting. See
 //!   [`wavelet`] and [`picture`].
+//! * **Profile / level conformance** — the Annex C profile constraints
+//!   (parse-code tables C.1/C.2, defined profile values) and the
+//!   SMPTE ST 2042-2:2017 generalized-level definitions (levels 0..=7:
+//!   base-format coverage, the §5.3 custom-flag rules with their
+//!   format-7 / progressive-relabel / Level-4 48 fps carve-outs, the
+//!   §5.4 picture constraints and the §5.5 no-mixed-units rule), as
+//!   opt-in checks — the decode path stays permissive. See
+//!   [`conformance`].
 //!
 //! ## `oxideav-core` integration
 //!
@@ -73,6 +81,7 @@
 //! ```
 
 pub mod bitio;
+pub mod conformance;
 pub mod error;
 pub mod params;
 pub mod picture;
