@@ -7,6 +7,16 @@ on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Hardening for the new parse surface.** A full-metadata stream —
+  every §11.4 custom flag set, including custom frame rate, aspect
+  ratio, clean area and a three-part colour-spec override — joins the
+  every-truncation-point sweep (each cut must error promptly) and gets
+  an every-single-bit-flip sweep run through the decoder *and* both new
+  bounded stream walkers (`conformance::check_stream`,
+  `mxf::sub_descriptor_values`); the walkers also face the
+  deterministic pseudo-random-garbage loop. No panics, hangs or
+  unbounded allocations anywhere.
+
 - **MXF mapping data (`mxf` module, SMPTE ST 2042-4:2018).** The
   staged MXF-mapping standard's identifiers and descriptor mappings,
   as plain data with no `oxideav-core` dependency: the Picture Element

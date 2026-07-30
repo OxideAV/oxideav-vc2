@@ -359,3 +359,86 @@ fn pseudo_random_garbage_never_panics() {
         let _ = decode_sequence(&buf);
     }
 }
+
+/// A well-formed stream whose sequence header sets *every* §11.4 custom
+/// flag — explicit dimensions, chroma format, scan format, custom frame
+/// rate, custom pixel aspect ratio, clean area, custom signal range and
+/// a colour spec with all three per-part overrides — so the retained
+/// display-metadata fields all sit on the wire as cut and flip targets.
+fn full_metadata_stream() -> Vec<u8> {
+    use common::{header_body, HeaderSpec};
+    let p = PicParams::hq_depth0();
+    let y = [5i64, -6, 7, -8];
+    let c = [0i64; 2];
+    let seq = header_body(&HeaderSpec {
+        base_video_format: 0,
+        frame_size: Some((2, 2)),
+        color_diff_index: Some(1),
+        scan_format: Some(0),
+        frame_rate_custom: Some((30000, 1001)),
+        pixel_aspect_custom: Some((10, 11)),
+        clean_area: Some((2, 2, 0, 0)),
+        color_spec_custom: Some((Some(4), Some(4), Some(5))),
+        ..Default::default()
+    });
+    // 4:2:2 at 2x2: chroma planes are 1x2.
+    let pic = picture_body(&p, 0, &[hq_slice_bytes(p.qindex, &y, &c, &c)]);
+    build_units(&[(0x00, seq), (0xE8, pic)])
+}
+
+#[test]
+fn every_truncation_point_errors_cleanly_full_metadata() {
+    // The retained §11.4.6–§11.4.10 fields add cut points inside frame
+    // rate, aspect ratio, clean area and colour spec; every one must
+    // still yield a prompt error.
+    let stream = full_metadata_stream();
+    assert!(decode_sequence(&stream).is_ok());
+    for len in 0..stream.len() {
+        assert!(
+            decode_sequence(&stream[..len]).is_err(),
+            "truncation at {len} of {} unexpectedly decoded",
+            stream.len()
+        );
+    }
+}
+
+#[test]
+fn single_bit_corruption_of_full_metadata_stream_never_panics() {
+    // Every single-bit flip must decode, error, or be rejected — never
+    // panic — through the decoder *and* the two new stream walkers
+    // (conformance checking and MXF sub-descriptor scanning), whose
+    // parse surface the corrupted metadata fields exercise directly.
+    let stream = full_metadata_stream();
+    for byte in 0..stream.len() {
+        for bit in 0..8 {
+            let mut mutant = stream.clone();
+            mutant[byte] ^= 1 << bit;
+            let _ = decode_sequence(&mutant);
+            let _ = oxideav_vc2::conformance::check_stream(&mutant);
+            let _ = oxideav_vc2::mxf::sub_descriptor_values(&mutant);
+        }
+    }
+}
+
+#[test]
+fn stream_walkers_survive_pseudo_random_garbage() {
+    // The bounded walkers must return promptly on arbitrary bytes, with
+    // skip offsets pointing anywhere.
+    let mut state: u64 = 0x1319_8A2E_0370_7344;
+    let mut next = move || {
+        state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (state >> 33) as u8
+    };
+    for case in 0..48 {
+        let len = 16 + (case * 7) % 160;
+        let mut buf: Vec<u8> = (0..len).map(|_| next()).collect();
+        if case % 2 == 0 {
+            buf[..4].copy_from_slice(&oxideav_vc2::PARSE_INFO_PREFIX);
+            buf[4] = [0x00, 0x10, 0xE8, 0xC8, 0xEC, 0xCC, 0x30][case % 7];
+        }
+        let _ = oxideav_vc2::conformance::check_stream(&buf);
+        let _ = oxideav_vc2::mxf::sub_descriptor_values(&buf);
+    }
+}
