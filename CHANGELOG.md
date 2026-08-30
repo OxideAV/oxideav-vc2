@@ -7,6 +7,50 @@ on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Encoder (SMPTE ST 2042-1:2022, write side).** The crate is now a
+  full codec: `encoder` module (standalone, no `oxideav-core`
+  dependency) with `EncoderConfig` / `SequenceEncoder` /
+  `encode_sequence`. Forward DWT for all seven wavelets as the
+  bit-exact inverse of the §15.4 lifting synthesis (asymmetric
+  `dwt_depth_ho` transforms included), §13.2.3 edge-extension padding,
+  §13.3 dead-zone forward quantisation, per-slice quantisation-index
+  election, write-side §13.4 DC prediction from reconstructed
+  neighbours, §13.5.3 low-delay and §13.5.4 high-quality slice packing
+  (trailing-zero trimming backed by in-block one-bit fill, automatic
+  `slice_size_scaler` sizing), §10.5 parse-info offset chaining, §11
+  sequence headers written as Annex B base-format deltas with preset
+  indices where Tables 8–11 carry the value, the §11.2.2 major-version
+  rule, §12.4.4 extended transform parameters, §14 fragmented
+  pictures, concatenated sequences, and rate control (lossless / fixed
+  index / exact low-delay picture-byte targets via the §13.5.3.2
+  rational / bit-rate-derived targets). Configurations claiming an
+  ST 2042-2 level are checked against it at construction.
+- **`oxideav-core` `Encoder` wrapper.** `make_encoder` +
+  `register(ctx)` now installs an encoder factory alongside the
+  decoder; `Vc2EncoderOptions` declares the schema (profile, wavelet,
+  depths, slice grid, qindex, picture-bytes, fragment-slices, level,
+  slice-prefix-bytes, sequence-per-packet). Accepts all twelve planar
+  YUV surfaces (8-bit bytes, 10/12/16-bit LSB-anchored words), derives
+  byte targets from `bit_rate` × `frame_rate`, and emits either one
+  sequence closed at flush or a self-contained sequence per packet.
+- **Annex A bit writer + forward lifting.** `bitio::BitWriter` (with
+  exp-Golomb code-length helpers) and the analysis counterparts of the
+  wavelet synthesis (`oned_analysis` / `h_analysis` / `vh_analysis`),
+  reversibility-tested against the decoder for every filter pair;
+  `transform::dwt` / `pad_component`, `quant::forward_quant`, and
+  preset reverse-lookups in `params`.
+- **Pinned encoder fixture matrix.** 14 encoder-emitted streams under
+  `tests/data/enc_*` with regeneration-byte-exact and pinned-decode
+  tests; 11 verified bit-exact against the independent black-box
+  validator CLI (five wavelets, three samplings, 8/10/12-bit, HQ
+  lossless / fixed-index / rate-controlled plus both low-delay rate
+  cases). The Daubechies (9,7) case pins a validator divergence
+  confined to the rightmost sample column (this crate follows
+  Table 22 and the §15.4.4.1 edge clamp verbatim; both dumps staged);
+  the major-version-3 asymmetric and fragmented cases are pinned
+  self-consistent after probe experiments showed the validator has no
+  §12.4.4 extended-transform-parameters parse.
+
 - **Operating-Mode-A edit-unit helpers (`mxf`).**
   `edit_unit_is_complete_sequence` structurally verifies the
   per-edit-unit property behind the `EditUnitsAreCompleteSequences`

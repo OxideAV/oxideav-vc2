@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/OxideAV/oxideav-vc2/actions/workflows/ci.yml/badge.svg)](https://github.com/OxideAV/oxideav-vc2/actions/workflows/ci.yml) [![crates.io](https://img.shields.io/crates/v/oxideav-vc2.svg)](https://crates.io/crates/oxideav-vc2) [![docs.rs](https://docs.rs/oxideav-vc2/badge.svg)](https://docs.rs/oxideav-vc2) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Pure-Rust decoder for **SMPTE ST 2042-1:2022 VC-2** (a.k.a. **Dirac Pro**),
+Pure-Rust decoder **and encoder** for **SMPTE ST 2042-1:2022 VC-2** (a.k.a. **Dirac Pro**),
 an open, royalty-free, **intra-frame wavelet** video compression system
 developed by the BBC and standardised by SMPTE. Every picture is
 wavelet-transformed, the subbands are quantised and entropy-coded, and each
@@ -37,6 +37,26 @@ end-to-end on hand-assembled VC-2 streams.
 | MXF mapping data | ST 2042-4 | ✅ `mxf` module: essence container / compression labels, picture-element key, sub-descriptor key + all 7 item ULs; Annex B CDCI descriptor mappings (frame layout, stored dims, ref levels, subsampling, colour label ULs); wrapped-stream sub-descriptor scanner (distinct wavelet filters, header identity, constant version/profile/level); Operating-Mode-A edit-unit completeness helpers |
 | Profile / level conformance checks | Annex C + ST 2042-2 | ✅ opt-in `conformance` module: profile values + per-profile parse-code tables (C.1/C.2); generalized levels 0..=7 — base-format coverage, §5.3 custom-flag rules incl. the format-7 dimension / progressive-relabel / Level-4 48 fps carve-outs, §5.4 picture bounds (wavelet ≤ 4, depth ≤ 4, no asym flags at v3, equal DC per slice, quant values ≤ 127), §5.5 no mixed picture+fragment units; whole-stream walker |
 | Conformance fixtures | — | ✅ 8-case pinned matrix (`tests/data/`, staged under `docs/video/vc2/fixtures/`): 10/12-bit cases bit-exact vs an independent black-box validator across all samplings + 3 wavelets; 16-bit presets 7/8 and the mixed 12/10 custom-range case pinned as self-consistent references (probe-verified: the validator's envelope excludes signal-range presets 5..=8 **and** every custom index-0 range) |
+
+### Encoder
+
+The write side is the same clauses run backwards, sharing the decoder's
+tables and validated against it end to end:
+
+| Area | Spec | State |
+|------|------|-------|
+| Annex A bit writer | A.2–A.4 | ✅ literals + interleaved exp-Golomb, Table A.1/A.2-checked against the reader |
+| Forward DWT | §15.4 inverse | ✅ analysis lifting for all 7 filters, bit-exact inverse of the IDWT (tested per filter pair); asymmetric (`dwt_depth_ho`) transforms; §13.2.3 edge-extension padding |
+| Quantisation + slice packing | §13.3–§13.5 | ✅ dead-zone forward quant (index 0 = identity → lossless); per-slice qindex election (binary search, monotone-fit fallback); write-side §13.4 DC prediction from *reconstructed* neighbours (LD); §13.5.3 LD fixed-size slices + §13.5.4 HQ length-coded components; trailing-zero trimming with in-block one-bit fill; auto-raised `slice_size_scaler` |
+| Stream assembly | §10–§12, §14 | ✅ parse-info offsets chained exactly; §11 header written as Annex B base-format deltas (preset indices from Tables 8–11 where they fit, explicit values otherwise); §11.2.2 major-version rule (1/2/3 from features used); §12.4.4 extended params at v3; §14 fragmented pictures (setup + n-slice data fragments); end-of-sequence + concatenated sequences |
+| Rate control | — | ✅ lossless / fixed qindex (HQ), picture-byte target (LD exact via the §13.5.3.2 rational; HQ per-slice budget with remainder spread), bit-rate → per-picture bytes via the frame rate (halved for fields) |
+| Level self-check | ST 2042-2 | ✅ `SequenceEncoder::new` refuses configurations violating the claimed level (1..=7); `level_violations()` reports them |
+| `oxideav-core` `Encoder` | — | ✅ `register(ctx)` + `make_encoder`; `Vc2EncoderOptions` schema (profile/wavelet/depths/slices/qindex/picture-bytes/fragment-slices/level/sequence-per-packet); all 12 planar YUV formats; EOS-at-flush or self-contained sequence-per-packet (`V_DIRAC` framing) |
+| Encoder fixtures | — | ✅ 14-case pinned matrix (`tests/data/enc_*`): regeneration byte-exact + decode pinned; **11 cases bit-exact against the independent black-box validator** (5 wavelets, 3 samplings, 8/10/12-bit, HQ lossless/fixed-q/rate + both LD rate cases); daub97 diverges from the validator only on the rightmost column (ours is Table 22 / §15.4.4.1-exact, both dumps pinned); v3 asym/fragment cases pinned self-consistent — probe-verified the validator has no §12.4.4 parse |
+
+Every emitted stream round-trips through this crate's decoder
+(sample-exact; bit-exact input recovery in the lossless modes) and walks
+the opt-in `conformance` checker violation-free.
 
 ### Conformance posture (RP 2042-3)
 

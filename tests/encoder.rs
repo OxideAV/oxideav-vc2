@@ -504,3 +504,23 @@ fn large_lossless_slices_raise_the_size_scaler() {
     let pics = decode_clean(&stream);
     pic.assert_exact(&pics[0]);
 }
+
+#[test]
+fn encoder_output_survives_bit_corruption() {
+    // Hostile-transport sweep: every byte of an encoder-emitted stream,
+    // flipped at its top and bottom bit, must run the decoder and the
+    // conformance walker to a clean Ok/Err — no panic, hang or
+    // unbounded allocation (the decoder's existing hardening applies to
+    // the encoder's own output shape too).
+    let pic = test_picture(24, 16, ColorDiffFormat::Yuv422, 10, 10, 55);
+    let cfg = EncoderConfig::new(24, 16, ColorDiffFormat::Yuv422, 10).slices(2, 2);
+    let stream = encode_sequence(cfg, &[pic.input()]).expect("encode");
+    for i in 0..stream.len() {
+        for bit in [0x01u8, 0x80] {
+            let mut mutated = stream.clone();
+            mutated[i] ^= bit;
+            let _ = oxideav_vc2::decode_sequence(&mutated);
+            let _ = conformance::check_stream(&mutated);
+        }
+    }
+}

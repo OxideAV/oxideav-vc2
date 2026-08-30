@@ -1,6 +1,7 @@
 //! # oxideav-vc2
 //!
-//! Pure-Rust decoder for **SMPTE ST 2042-1:2022 VC-2** ("Dirac Pro") — an
+//! Pure-Rust decoder and encoder for **SMPTE ST 2042-1:2022 VC-2**
+//! ("Dirac Pro") — an
 //! open, royalty-free, intra-frame wavelet video compression system. Each
 //! picture is wavelet-transformed (LeGall 5/3, Deslauriers-Dubuc, Haar,
 //! Fidelity, Daubechies), the subbands are quantised and entropy-coded, and
@@ -50,6 +51,12 @@
 //!   labels), and a wrapped-stream scanner deriving the sub-descriptor
 //!   values (distinct wavelet filters, sequence-header identity). See
 //!   [`mxf`].
+//! * **Encoder** (§15.4 run backwards + §13 + §10–§12 + §14) — forward
+//!   DWT for all seven wavelets (the bit-exact inverse of the lifting
+//!   synthesis), dead-zone quantisation with per-slice index election,
+//!   write-side DC prediction, LD/HQ slice packing, sequence headers as
+//!   Annex B deltas, fragmented pictures and rate control. See
+//!   [`encoder`] and (with the `registry` feature) [`encoder_core`].
 //! * **Profile / level conformance** — the Annex C profile constraints
 //!   (parse-code tables C.1/C.2, defined profile values) and the
 //!   SMPTE ST 2042-2:2017 generalized-level definitions (levels 0..=7:
