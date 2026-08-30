@@ -206,6 +206,20 @@ pub fn wavelet_filter(index: u64) -> Option<WaveletFilter> {
 /// wrapping keeps the (garbage-in, garbage-out) result deterministic and
 /// panic-free, and the §15.5 clip bounds the final output.
 fn apply_lift(a: &mut [i64], stage: &LiftStage) {
+    lift(a, stage, false);
+}
+
+/// The exact inverse of one lifting stage: the same filtered sum, applied
+/// with the opposite sign. A lifting stage only ever reads the parity it
+/// does not update, so subtracting what synthesis added (or adding what
+/// it subtracted) restores the input bit-exactly — the basis of the
+/// forward transform an encoder needs (the §13.2.3 NOTE describes the
+/// encoder's DWT as "the inverse of the operations defined in 15.4").
+fn apply_lift_inverse(a: &mut [i64], stage: &LiftStage) {
+    lift(a, stage, true);
+}
+
+fn lift(a: &mut [i64], stage: &LiftStage, invert: bool) {
     let l = stage.taps.len() as i32;
     let d = stage.d;
     let s = stage.s;
@@ -233,7 +247,10 @@ fn apply_lift(a: &mut [i64], stage: &LiftStage) {
             };
             sum = sum.wrapping_add(stage.taps[(i - d) as usize].wrapping_mul(a[pos as usize]));
         }
-        let delta = sum.wrapping_add(rounding) >> s;
+        let mut delta = sum.wrapping_add(rounding) >> s;
+        if invert {
+            delta = delta.wrapping_neg();
+        }
         match stage.kind {
             LiftType::Type1 => a[(2 * n) as usize] = a[(2 * n) as usize].wrapping_add(delta),
             LiftType::Type2 => a[(2 * n) as usize] = a[(2 * n) as usize].wrapping_sub(delta),
@@ -252,6 +269,14 @@ fn apply_lift(a: &mut [i64], stage: &LiftStage) {
 pub fn oned_synthesis(a: &mut [i64], filter: &WaveletFilter) {
     for stage in filter.stages {
         apply_lift(a, stage);
+    }
+}
+
+/// Forward one-dimensional analysis: the exact inverse of
+/// [`oned_synthesis`] — every lifting stage undone in reverse order.
+pub fn oned_analysis(a: &mut [i64], filter: &WaveletFilter) {
+    for stage in filter.stages.iter().rev() {
+        apply_lift_inverse(a, stage);
     }
 }
 
@@ -361,6 +386,81 @@ pub fn vh_synthesis(
     synth
 }
 
+/// Forward horizontal-only analysis — the exact inverse of
+/// [`h_synthesis`]: add the accuracy bits (`<< bit_shift`, which the
+/// synthesis Step 4 rounding shift removes without loss), run
+/// [`oned_analysis`] over every row, and de-interleave even columns into
+/// `L` and odd columns into `H`. `plane.width` must be even.
+pub fn h_analysis(plane: &Plane, filter_ho: &WaveletFilter) -> (Plane, Plane) {
+    debug_assert!(plane.width % 2 == 0);
+    let half = plane.width / 2;
+    let mut l = Plane::new(half, plane.height);
+    let mut h = Plane::new(half, plane.height);
+    let mut row = vec![0i64; plane.width];
+    for y in 0..plane.height {
+        for (x, slot) in row.iter_mut().enumerate() {
+            *slot = plane.get(y, x) << filter_ho.bit_shift;
+        }
+        oned_analysis(&mut row, filter_ho);
+        for x in 0..half {
+            l.set(y, x, row[2 * x]);
+            h.set(y, x, row[2 * x + 1]);
+        }
+    }
+    (l, h)
+}
+
+/// Forward two-dimensional analysis — the exact inverse of
+/// [`vh_synthesis`]: add the accuracy bits, undo the horizontal synthesis
+/// on every row, undo the vertical synthesis on every column, then split
+/// the quincunx interleave into `(LL, HL, LH, HH)`. Both plane dimensions
+/// must be even.
+pub fn vh_analysis(
+    plane: &Plane,
+    filter_v: &WaveletFilter,
+    filter_ho: &WaveletFilter,
+) -> (Plane, Plane, Plane, Plane) {
+    debug_assert!(plane.width % 2 == 0 && plane.height % 2 == 0);
+    let (width, height) = (plane.width, plane.height);
+    let mut work = Plane::new(width, height);
+    for (dst, &src) in work.data.iter_mut().zip(&plane.data) {
+        *dst = src << filter_ho.bit_shift;
+    }
+    // Inverse of Step 3b — horizontal analysis on each row.
+    let mut row = vec![0i64; width];
+    for y in 0..height {
+        row.copy_from_slice(&work.data[y * width..(y + 1) * width]);
+        oned_analysis(&mut row, filter_ho);
+        work.data[y * width..(y + 1) * width].copy_from_slice(&row);
+    }
+    // Inverse of Step 3a — vertical analysis on each column.
+    let mut col = vec![0i64; height];
+    for x in 0..width {
+        for (y, slot) in col.iter_mut().enumerate() {
+            *slot = work.get(y, x);
+        }
+        oned_analysis(&mut col, filter_v);
+        for (y, &v) in col.iter().enumerate() {
+            work.set(y, x, v);
+        }
+    }
+    // Inverse of Step 2 — quincunx de-interleave.
+    let (hw, hh) = (width / 2, height / 2);
+    let mut ll = Plane::new(hw, hh);
+    let mut hl = Plane::new(hw, hh);
+    let mut lh = Plane::new(hw, hh);
+    let mut hhb = Plane::new(hw, hh);
+    for y in 0..hh {
+        for x in 0..hw {
+            ll.set(y, x, work.get(2 * y, 2 * x));
+            hl.set(y, x, work.get(2 * y, 2 * x + 1));
+            lh.set(y, x, work.get(2 * y + 1, 2 * x));
+            hhb.set(y, x, work.get(2 * y + 1, 2 * x + 1));
+        }
+    }
+    (ll, hl, lh, hhb)
+}
+
 /// Step 4 of §15.4.2 / §15.4.3: `synth[y][x] = (synth + (1<<(shift-1))) >> shift`.
 fn apply_bit_shift(synth: &mut Plane, shift: u32) {
     if shift > 0 {
@@ -455,6 +555,76 @@ mod tests {
         forward_legall(&mut a);
         oned_synthesis(&mut a, &wavelet_filter(1).unwrap());
         assert_eq!(a, original);
+    }
+
+    /// Deterministic pseudo-random sample plane (LCG) within a signed
+    /// `bits`-bit range.
+    fn noise_plane(width: usize, height: usize, bits: u32, seed: u64) -> Plane {
+        let mut p = Plane::new(width, height);
+        let mut s = seed;
+        let half = 1i64 << (bits - 1);
+        for v in p.data.iter_mut() {
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            *v = ((s >> 33) as i64 % (2 * half)) - half;
+        }
+        p
+    }
+
+    #[test]
+    fn oned_analysis_inverts_synthesis_for_every_filter() {
+        for idx in 0..=6u64 {
+            let f = wavelet_filter(idx).unwrap();
+            for len in [2usize, 4, 6, 8, 16, 30] {
+                let original = noise_plane(len, 1, 12, 7 + idx * 31 + len as u64).data;
+                let mut a = original.clone();
+                oned_analysis(&mut a, &f);
+                oned_synthesis(&mut a, &f);
+                assert_eq!(a, original, "filter {idx} len {len}");
+            }
+        }
+    }
+
+    #[test]
+    fn h_and_vh_analysis_invert_synthesis_for_every_filter_pair() {
+        for v_idx in 0..=6u64 {
+            for ho_idx in 0..=6u64 {
+                let fv = wavelet_filter(v_idx).unwrap();
+                let fh = wavelet_filter(ho_idx).unwrap();
+                let plane = noise_plane(12, 6, 16, v_idx * 7 + ho_idx);
+                let (l, h) = h_analysis(&plane, &fh);
+                let back = h_synthesis(&l, &h, &fh);
+                assert_eq!(back.data, plane.data, "h {v_idx}/{ho_idx}");
+                let (ll, hl, lh, hh) = vh_analysis(&plane, &fv, &fh);
+                let back = vh_synthesis(&ll, &hl, &lh, &hh, &fv, &fh);
+                assert_eq!(back.data, plane.data, "vh {v_idx}/{ho_idx}");
+            }
+        }
+    }
+
+    #[test]
+    fn analysis_of_flat_plane_has_zero_detail() {
+        // A constant picture carries no high-frequency content: every
+        // detail subband must be exactly zero and the LL band a constant
+        // (the DC gain of the filter pair). The Daubechies (9,7) integer
+        // approximation (Table 22) rounds inside its four stages, so its
+        // detail bands carry at most a ±1 rounding residue rather than
+        // exact zeros; every other filter is exactly DC-neutral.
+        for idx in 0..=6u64 {
+            let f = wavelet_filter(idx).unwrap();
+            let tol = if idx == 6 { 1 } else { 0 };
+            let mut plane = Plane::new(8, 8);
+            plane.data.iter_mut().for_each(|v| *v = 100);
+            let (ll, hl, lh, hh) = vh_analysis(&plane, &f, &f);
+            assert!(hl.data.iter().all(|&v| v.abs() <= tol), "HL filter {idx}");
+            assert!(lh.data.iter().all(|&v| v.abs() <= tol), "LH filter {idx}");
+            assert!(hh.data.iter().all(|&v| v.abs() <= tol), "HH filter {idx}");
+            assert!(
+                ll.data.iter().all(|&v| (v - ll.data[0]).abs() <= tol),
+                "LL filter {idx}"
+            );
+        }
     }
 
     /// Inverse of LeGall (5,3) `oned_synthesis`: undo the two lifting stages

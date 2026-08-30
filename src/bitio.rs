@@ -264,6 +264,139 @@ impl<'a> BitReader<'a> {
     }
 }
 
+/// Bit writer producing VC-2 stream bytes — the write-side mirror of
+/// [`BitReader`] (Annex A read in reverse): bits are emitted MSB first,
+/// `byte_align` zero-pads the partial byte, and the interleaved
+/// exp-Golomb codes of A.4.3 / A.4.4 are produced so that `read_uint` /
+/// `read_sint` recover the value (Table A.1 / Table A.2).
+#[derive(Debug, Clone, Default)]
+pub struct BitWriter {
+    bytes: Vec<u8>,
+    /// Bits already placed in the partial byte (0..=7).
+    pending: u8,
+    pending_bits: u32,
+}
+
+impl BitWriter {
+    /// Empty writer positioned at a byte boundary.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Emit one bit (`write_bit`, the inverse of A.2.3).
+    #[inline]
+    pub fn put_bit(&mut self, bit: u32) {
+        self.pending = (self.pending << 1) | (bit as u8 & 1);
+        self.pending_bits += 1;
+        if self.pending_bits == 8 {
+            self.bytes.push(self.pending);
+            self.pending = 0;
+            self.pending_bits = 0;
+        }
+    }
+
+    /// Emit a boolean (`write_bool`, inverse of A.3.2).
+    #[inline]
+    pub fn put_bool(&mut self, b: bool) {
+        self.put_bit(b as u32);
+    }
+
+    /// Emit the low `n` bits of `val`, MSB first (inverse of A.3.3).
+    pub fn put_nbits(&mut self, val: u64, n: u32) {
+        for i in (0..n).rev() {
+            self.put_bit(((val >> i) & 1) as u32);
+        }
+    }
+
+    /// Emit an `n`-byte unsigned literal (inverse of A.3.4).
+    pub fn put_uint_lit(&mut self, val: u64, n: u32) {
+        self.put_nbits(val, 8 * n);
+    }
+
+    /// Emit an unsigned interleaved exp-Golomb code (inverse of A.4.3):
+    /// each bit of `value + 1` below its leading one is preceded by a
+    /// `0` follow bit and the code ends with a `1`.
+    pub fn put_uint(&mut self, value: u64) {
+        let v = value.wrapping_add(1);
+        // `value == u64::MAX` is not representable (the +1 wraps); the
+        // saturating readers never hand such a value back, and no
+        // syntax element approaches it.
+        debug_assert!(v != 0, "exp-Golomb value out of range");
+        let top = 63 - v.leading_zeros() as i32; // index of the leading 1
+        for i in (0..top).rev() {
+            self.put_bit(0);
+            self.put_bit(((v >> i) & 1) as u32);
+        }
+        self.put_bit(1);
+    }
+
+    /// Emit a signed interleaved exp-Golomb code (inverse of A.4.4): the
+    /// magnitude as [`Self::put_uint`], then a sign bit (1 = negative)
+    /// for non-zero values.
+    pub fn put_sint(&mut self, value: i64) {
+        self.put_uint(value.unsigned_abs());
+        if value != 0 {
+            self.put_bit((value < 0) as u32);
+        }
+    }
+
+    /// Zero-pad to the next byte boundary (inverse of A.2.4 — the
+    /// reader discards the padding bits).
+    pub fn byte_align(&mut self) {
+        while self.pending_bits != 0 {
+            self.put_bit(0);
+        }
+    }
+
+    /// True when the writer sits on a byte boundary.
+    #[inline]
+    pub fn is_byte_aligned(&self) -> bool {
+        self.pending_bits == 0
+    }
+
+    /// Number of bits emitted so far (including any partial byte).
+    #[inline]
+    pub fn bit_len(&self) -> u64 {
+        self.bytes.len() as u64 * 8 + self.pending_bits as u64
+    }
+
+    /// Append another writer's bits (of any alignment) after this one's.
+    pub fn append(&mut self, other: &BitWriter) {
+        for &b in &other.bytes {
+            self.put_nbits(b as u64, 8);
+        }
+        for i in (0..other.pending_bits).rev() {
+            self.put_bit(((other.pending >> i) & 1) as u32);
+        }
+    }
+
+    /// Finish: byte-align and return the bytes.
+    pub fn into_bytes(mut self) -> Vec<u8> {
+        self.byte_align();
+        self.bytes
+    }
+
+    /// The whole bytes emitted so far (excluding any partial byte).
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
+/// Bit cost of the unsigned interleaved exp-Golomb code for `value`
+/// (A.4.3): `2 * floor(log2(value + 1)) + 1`.
+#[inline]
+pub fn uint_code_len(value: u64) -> u64 {
+    let v = value.wrapping_add(1);
+    2 * (63 - v.leading_zeros() as u64) + 1
+}
+
+/// Bit cost of the signed interleaved exp-Golomb code for `value`
+/// (A.4.4): the magnitude's code plus one sign bit when non-zero.
+#[inline]
+pub fn sint_code_len(value: i64) -> u64 {
+    uint_code_len(value.unsigned_abs()) + (value != 0) as u64
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -388,6 +521,85 @@ mod tests {
         r.set_bits_left(0);
         assert_eq!(r.read_uintb(), 0);
         assert_eq!(r.read_sintb(), 0);
+    }
+
+    #[test]
+    fn writer_roundtrips_tables_a1_a2_and_literals() {
+        let mut w = BitWriter::new();
+        for v in 0..40u64 {
+            w.put_uint(v);
+        }
+        for v in -20..=20i64 {
+            w.put_sint(v);
+        }
+        w.put_nbits(0b1011, 4);
+        w.put_bool(true);
+        w.byte_align();
+        w.put_uint_lit(0xBEEF, 2);
+        w.put_uint(u64::MAX - 1);
+        let bytes = w.into_bytes();
+        let mut r = BitReader::new(&bytes);
+        for v in 0..40u64 {
+            assert_eq!(r.read_uint(), v);
+        }
+        for v in -20..=20i64 {
+            assert_eq!(r.read_sint(), v);
+        }
+        assert_eq!(r.read_nbits(4), 0b1011);
+        assert!(r.read_bool());
+        r.byte_align();
+        assert_eq!(r.read_uint_lit(2), 0xBEEF);
+        assert_eq!(r.read_uint(), u64::MAX - 1);
+        assert!(!r.overrun());
+    }
+
+    #[test]
+    fn writer_bit_patterns_match_table_a1() {
+        // Table A.1: 1 -> "001", 2 -> "011", 3 -> "00001"; Table A.2: -1 -> "0011".
+        let pat = |f: &dyn Fn(&mut BitWriter)| {
+            let mut w = BitWriter::new();
+            f(&mut w);
+            let n = w.bit_len();
+            let bytes = w.into_bytes();
+            (0..n)
+                .map(|i| ((bytes[(i / 8) as usize] >> (7 - i % 8)) & 1).to_string())
+                .collect::<String>()
+        };
+        assert_eq!(pat(&|w| w.put_uint(0)), "1");
+        assert_eq!(pat(&|w| w.put_uint(1)), "001");
+        assert_eq!(pat(&|w| w.put_uint(2)), "011");
+        assert_eq!(pat(&|w| w.put_uint(3)), "00001");
+        assert_eq!(pat(&|w| w.put_uint(9)), "0001001");
+        assert_eq!(pat(&|w| w.put_sint(-1)), "0011");
+        assert_eq!(pat(&|w| w.put_sint(4)), "000110");
+    }
+
+    #[test]
+    fn code_lengths_match_writer() {
+        for v in 0..600u64 {
+            let mut w = BitWriter::new();
+            w.put_uint(v);
+            assert_eq!(w.bit_len(), uint_code_len(v), "uint {v}");
+        }
+        for v in -300..300i64 {
+            let mut w = BitWriter::new();
+            w.put_sint(v);
+            assert_eq!(w.bit_len(), sint_code_len(v), "sint {v}");
+        }
+    }
+
+    #[test]
+    fn append_preserves_unaligned_bits() {
+        let mut a = BitWriter::new();
+        a.put_nbits(0b101, 3);
+        let mut b = BitWriter::new();
+        b.put_nbits(0b1100110011, 10);
+        a.append(&b);
+        assert_eq!(a.bit_len(), 13);
+        let bytes = a.into_bytes();
+        let mut r = BitReader::new(&bytes);
+        assert_eq!(r.read_nbits(3), 0b101);
+        assert_eq!(r.read_nbits(10), 0b1100110011);
     }
 
     /// Pack a list of bit values (MSB first) into bytes, zero-padding the
