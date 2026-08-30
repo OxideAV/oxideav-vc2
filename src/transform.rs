@@ -275,7 +275,8 @@ fn read_quant_matrix(
 
 /// `subband_width(level, comp)` (§13.2.3). `w` is the component luma/chroma
 /// width.
-fn subband_width(w: u64, dwt_depth_ho: u64, dwt_depth: u64, level: u64) -> u64 {
+#[doc(hidden)]
+pub fn subband_width(w: u64, dwt_depth_ho: u64, dwt_depth: u64, level: u64) -> u64 {
     let scale_w = 1u64 << (dwt_depth_ho + dwt_depth);
     let pw = scale_w * w.div_ceil(scale_w);
     if level == 0 {
@@ -286,7 +287,8 @@ fn subband_width(w: u64, dwt_depth_ho: u64, dwt_depth: u64, level: u64) -> u64 {
 }
 
 /// `subband_height(level, comp)` (§13.2.3).
-fn subband_height(h: u64, dwt_depth_ho: u64, dwt_depth: u64, level: u64) -> u64 {
+#[doc(hidden)]
+pub fn subband_height(h: u64, dwt_depth_ho: u64, dwt_depth: u64, level: u64) -> u64 {
     let scale_h = 1u64 << dwt_depth;
     let ph = scale_h * h.div_ceil(scale_h);
     if level <= dwt_depth_ho {
@@ -297,7 +299,8 @@ fn subband_height(h: u64, dwt_depth_ho: u64, dwt_depth: u64, level: u64) -> u64 
 }
 
 /// `slice_left` / `slice_right` / `slice_top` / `slice_bottom` (§13.5.6.2).
-fn slice_bounds(
+#[doc(hidden)]
+pub fn slice_bounds(
     sub_w: u64,
     sub_h: u64,
     slices_x: u64,
@@ -365,7 +368,8 @@ fn init_component(w: u64, h: u64, tp: &TransformParameters) -> ComponentCoeffs {
 }
 
 /// Quantizer values per layout entry (§13.5.5 `slice_quantizers`).
-fn slice_quantizers(qindex: u64, tp: &TransformParameters) -> Vec<u64> {
+#[doc(hidden)]
+pub fn slice_quantizers(qindex: u64, tp: &TransformParameters) -> Vec<u64> {
     let layout = subband_layout(tp.dwt_depth_ho, tp.dwt_depth);
     let mut out = Vec::with_capacity(layout.len());
     for &(level, orient) in &layout {
@@ -467,7 +471,8 @@ pub fn transform_data(
 }
 
 /// `slice_bytes()` (§13.5.3.2).
-fn slice_bytes(tp: &TransformParameters, sx: u64, sy: u64) -> u64 {
+#[doc(hidden)]
+pub fn slice_bytes(tp: &TransformParameters, sx: u64, sy: u64) -> u64 {
     let slice_number = sy * tp.slices_x + sx;
     let a = ((slice_number + 1) * tp.slice_bytes_numerator) / tp.slice_bytes_denominator;
     let b = (slice_number * tp.slice_bytes_numerator) / tp.slice_bytes_denominator;
@@ -678,9 +683,181 @@ pub fn idwt(coeffs: &ComponentCoeffs, tp: &TransformParameters) -> Result<Plane>
     Ok(dc)
 }
 
+/// Padded component dimensions (§13.2.3): width rounded up to a multiple
+/// of `2^(dwt_depth_ho + dwt_depth)`, height to a multiple of
+/// `2^dwt_depth`.
+pub fn padded_dims(w: u64, h: u64, tp: &TransformParameters) -> (usize, usize) {
+    let scale_w = 1u64 << (tp.dwt_depth_ho + tp.dwt_depth);
+    let scale_h = 1u64 << tp.dwt_depth;
+    (
+        (scale_w * w.div_ceil(scale_w)) as usize,
+        (scale_h * h.div_ceil(scale_h)) as usize,
+    )
+}
+
+/// Build the padded signed sample plane the forward transform consumes:
+/// `samples` (row-major `w × h`, unsigned code values) minus the §15.5
+/// offset `2^(depth-1)`, extended to the §13.2.3 padded dimensions by
+/// repeating the last column / row (edge extension — the padding the
+/// §13.2.3 NOTE recommends for compression; any padding decodes the same
+/// visible picture because the decoder discards it, §15.4.5).
+pub fn pad_component(
+    samples: &[u16],
+    w: u64,
+    h: u64,
+    depth: u32,
+    tp: &TransformParameters,
+) -> Plane {
+    let (pw, ph) = padded_dims(w, h, tp);
+    let (w, h) = (w as usize, h as usize);
+    let offset = 1i64 << depth.saturating_sub(1);
+    let mut plane = Plane::new(pw, ph);
+    for y in 0..ph {
+        let sy = y.min(h - 1);
+        for x in 0..pw {
+            let sx = x.min(w - 1);
+            plane.set(y, x, samples[sy * w + sx] as i64 - offset);
+        }
+    }
+    plane
+}
+
+/// Forward DWT (`dwt()`, the inverse of §15.4.1 `idwt()`) for one
+/// component: `plane` must already carry the padded dimensions of
+/// [`padded_dims`]. The 2-D levels are analysed first from the finest
+/// (level `dwt_depth_ho + dwt_depth`) down, then the horizontal-only
+/// levels, so that [`idwt`] over the returned store reproduces `plane`
+/// bit-exactly (before quantisation).
+pub fn dwt(plane: &Plane, w: u64, h: u64, tp: &TransformParameters) -> Result<ComponentCoeffs> {
+    let filter_v: WaveletFilter = wavelet::wavelet_filter(tp.wavelet_index)
+        .ok_or(Error::UnsupportedWaveletIndex(tp.wavelet_index))?;
+    let filter_ho: WaveletFilter = wavelet::wavelet_filter(tp.wavelet_index_ho)
+        .ok_or(Error::UnsupportedWaveletIndex(tp.wavelet_index_ho))?;
+    let (pw, ph) = padded_dims(w, h, tp);
+    if plane.width != pw || plane.height != ph {
+        return Err(Error::InvalidValue(
+            "forward DWT input plane does not carry the padded dimensions",
+        ));
+    }
+    let layout = subband_layout(tp.dwt_depth_ho, tp.dwt_depth);
+    let mut bands: Vec<Option<Plane>> = vec![None; layout.len()];
+    let find = |level: u64, orient: Orient| -> usize {
+        layout
+            .iter()
+            .position(|&(l, o)| l == level && o == orient)
+            .expect("layout contains the requested band")
+    };
+    let mut dc = plane.clone();
+    for n in ((tp.dwt_depth_ho + 1)..=(tp.dwt_depth_ho + tp.dwt_depth)).rev() {
+        let (ll, hl, lh, hh) = wavelet::vh_analysis(&dc, &filter_v, &filter_ho);
+        bands[find(n, Orient::HL)] = Some(hl);
+        bands[find(n, Orient::LH)] = Some(lh);
+        bands[find(n, Orient::HH)] = Some(hh);
+        dc = ll;
+    }
+    for n in (1..=tp.dwt_depth_ho).rev() {
+        let (l, hband) = wavelet::h_analysis(&dc, &filter_ho);
+        bands[find(n, Orient::H)] = Some(hband);
+        dc = l;
+    }
+    bands[0] = Some(dc);
+    let bands: Vec<Plane> = bands
+        .into_iter()
+        .map(|b| b.expect("every layout band is produced by the analysis"))
+        .collect();
+    // The analysis dimensions must agree with the §13.2.3 subband sizes the
+    // slice packer / unpacker index by.
+    for (i, &(level, _)) in layout.iter().enumerate() {
+        let sw = subband_width(w, tp.dwt_depth_ho, tp.dwt_depth, level) as usize;
+        let sh = subband_height(h, tp.dwt_depth_ho, tp.dwt_depth, level) as usize;
+        debug_assert_eq!((bands[i].width, bands[i].height), (sw, sh));
+    }
+    Ok(ComponentCoeffs {
+        width: w,
+        height: h,
+        bands,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn forward_dwt_inverts_idwt_symmetric_and_asymmetric() {
+        // Every filter pair at a couple of (ho, depth) shapes on an odd-sized
+        // component: pad, analyse, synthesise, and the padded plane returns
+        // bit-exactly (the visible region in particular).
+        let (w, h) = (13u64, 7u64);
+        let mut samples = vec![0u16; (w * h) as usize];
+        let mut seed = 99u64;
+        for v in samples.iter_mut() {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            *v = ((seed >> 40) % 1024) as u16;
+        }
+        for (wi, wi_ho) in [
+            (1, 1),
+            (0, 0),
+            (2, 2),
+            (3, 3),
+            (4, 4),
+            (5, 5),
+            (6, 6),
+            (3, 1),
+            (6, 5),
+        ] {
+            for (ho, depth) in [(0, 1), (0, 3), (1, 1), (2, 0), (2, 2)] {
+                let tp = TransformParameters {
+                    wavelet_index: wi,
+                    dwt_depth: depth,
+                    wavelet_index_ho: wi_ho,
+                    dwt_depth_ho: ho,
+                    asym_transform_index_flag: wi != wi_ho,
+                    asym_transform_flag: ho != 0,
+                    slices_x: 1,
+                    slices_y: 1,
+                    slice_bytes_numerator: 0,
+                    slice_bytes_denominator: 1,
+                    slice_prefix_bytes: 0,
+                    slice_size_scaler: 1,
+                    quant_matrix: Vec::new(),
+                };
+                let plane = pad_component(&samples, w, h, 10, &tp);
+                let coeffs = dwt(&plane, w, h, &tp).unwrap();
+                let back = idwt(&coeffs, &tp).unwrap();
+                assert_eq!(
+                    back.data, plane.data,
+                    "filters {wi}/{wi_ho} ho {ho} depth {depth}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn pad_component_edge_extends_and_offsets() {
+        let tp = TransformParameters {
+            wavelet_index: 1,
+            dwt_depth: 2,
+            wavelet_index_ho: 1,
+            dwt_depth_ho: 0,
+            asym_transform_index_flag: false,
+            asym_transform_flag: false,
+            slices_x: 1,
+            slices_y: 1,
+            slice_bytes_numerator: 0,
+            slice_bytes_denominator: 1,
+            slice_prefix_bytes: 0,
+            slice_size_scaler: 1,
+            quant_matrix: Vec::new(),
+        };
+        // 3x1 at depth 2 pads to 4x4; 8-bit offset 128.
+        let p = pad_component(&[128, 200, 10], 3, 1, 8, &tp);
+        assert_eq!((p.width, p.height), (4, 4));
+        assert_eq!(&p.data[..4], &[0, 72, -118, -118]);
+        assert_eq!(&p.data[12..], &[0, 72, -118, -118]);
+    }
 
     #[test]
     fn subband_dims_symmetric_depth2() {

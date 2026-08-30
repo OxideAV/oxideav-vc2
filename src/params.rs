@@ -159,6 +159,40 @@ fn preset_signal_range(index: u64) -> Result<(u64, u64, u64, u64)> {
     })
 }
 
+/// Table 10 index (1..=8) whose values equal the given signal range, if any.
+pub fn signal_range_preset_index(
+    luma_offset: u64,
+    luma_excursion: u64,
+    color_diff_offset: u64,
+    color_diff_excursion: u64,
+) -> Option<u64> {
+    (1..=8).find(|&i| {
+        preset_signal_range(i).ok()
+            == Some((
+                luma_offset,
+                luma_excursion,
+                color_diff_offset,
+                color_diff_excursion,
+            ))
+    })
+}
+
+/// Table 8 index (1..=16) for a frame rate, if it is a preset.
+pub fn frame_rate_preset_index(numer: u64, denom: u64) -> Option<u64> {
+    (1..=16).find(|&i| preset_frame_rate(i).ok() == Some((numer, denom)))
+}
+
+/// Table 9 index (1..=6) for a pixel aspect ratio, if it is a preset.
+pub fn pixel_aspect_ratio_preset_index(numer: u64, denom: u64) -> Option<u64> {
+    (1..=6).find(|&i| preset_pixel_aspect_ratio(i).ok() == Some((numer, denom)))
+}
+
+/// Table 11 index (1..=7) for a (primaries, matrix, transfer) triple, if
+/// a preset carries exactly it.
+pub fn color_spec_preset_index(primaries: u64, matrix: u64, transfer: u64) -> Option<u64> {
+    (1..=7).find(|&i| preset_color_spec(i).ok() == Some((primaries, matrix, transfer)))
+}
+
 /// One Annex B default row:
 /// (frame_width, frame_height, color_diff_index, source_sampling,
 ///  top_field_first, frame_rate_numer, frame_rate_denom,

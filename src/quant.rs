@@ -67,6 +67,23 @@ pub fn inverse_quant(quantized_coeff: i64, quant_index: u64) -> i64 {
     sign * magnitude
 }
 
+/// Forward (dead-zone) quantisation — the encoder-side counterpart of
+/// [`inverse_quant`], as the §13.3.1 NOTE 1 describes it: the magnitude is
+/// divided by the effective step `quant_factor(index) / 4` rounding
+/// down, so `|x| // qf` becomes `(4 * |x|) // quant_factor(index)`. Index
+/// 0 (factor 4) is the identity, which is what makes qindex-0 coding
+/// lossless.
+#[inline]
+pub fn forward_quant(coeff: i64, quant_index: u64) -> i64 {
+    let magnitude = coeff.unsigned_abs() as u128 * 4 / quant_factor(quant_index) as u128;
+    let magnitude = magnitude.min(i64::MAX as u128) as i64;
+    if coeff < 0 {
+        -magnitude
+    } else {
+        magnitude
+    }
+}
+
 /// Orientation key within the default-matrix table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Orient {
@@ -368,6 +385,30 @@ mod tests {
         assert_eq!(quant_offset(1), 2);
         // index 4: factor = 4*2 = 8 -> offset = (8+1)/2 = 4.
         assert_eq!(quant_offset(4), 4);
+    }
+
+    #[test]
+    fn forward_quant_identity_at_index_zero_and_reconstructs_within_step() {
+        for c in [-1000i64, -77, -1, 0, 1, 5, 123, 65535] {
+            assert_eq!(inverse_quant(forward_quant(c, 0), 0), c);
+        }
+        // For higher indices the reconstruction error is bounded by the
+        // effective step size `quant_factor / 4` (dead-zone quantiser with
+        // mid-point reconstruction).
+        for qi in 1..40u64 {
+            let step = quant_factor(qi) as f64 / 4.0;
+            for c in (-3000i64..3000).step_by(17) {
+                let r = inverse_quant(forward_quant(c, qi), qi);
+                assert!(
+                    ((r - c).abs() as f64) <= step + 1.0,
+                    "qi {qi} c {c} -> {r} (step {step})"
+                );
+                assert!(
+                    r.signum() == c.signum() || r == 0,
+                    "sign qi {qi} c {c} -> {r}"
+                );
+            }
+        }
     }
 
     #[test]

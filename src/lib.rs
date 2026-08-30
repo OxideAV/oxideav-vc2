@@ -89,6 +89,7 @@
 
 pub mod bitio;
 pub mod conformance;
+pub mod encoder;
 pub mod error;
 pub mod mxf;
 pub mod params;
@@ -98,6 +99,7 @@ pub mod sequence;
 pub mod transform;
 pub mod wavelet;
 
+pub use encoder::{encode_sequence, EncoderConfig, PictureInput, RateControl, SequenceEncoder};
 pub use error::{Error, Result};
 pub use picture::DecodedPicture;
 pub use sequence::{
