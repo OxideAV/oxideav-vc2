@@ -500,6 +500,8 @@ pub fn register(ctx: &mut RuntimeContext) {
         CodecInfo::new(CodecId::new(CODEC_ID))
             .capabilities(caps)
             .decoder(make_decoder)
+            .encoder(crate::encoder_core::make_encoder)
+            .encoder_options::<crate::encoder_core::Vc2EncoderOptions>()
             .tags([
                 CodecTag::fourcc(&PARSE_INFO_PREFIX),
                 CodecTag::matroska(MATROSKA_CODEC_ID),

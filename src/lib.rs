@@ -123,6 +123,12 @@ pub fn decode_sequence(data: &[u8]) -> Result<Vec<DecodedPicture>> {
 pub mod decoder;
 
 #[cfg(feature = "registry")]
+pub mod encoder_core;
+
+#[cfg(feature = "registry")]
+pub use encoder_core::{make_encoder, Vc2Encoder, Vc2EncoderOptions};
+
+#[cfg(feature = "registry")]
 pub use decoder::{
     make_decoder, register, Vc2Decoder, CODEC_ID, MATROSKA_CODEC_ID, MP4_OBJECT_TYPE,
     MP4_SAMPLE_ENTRY,
