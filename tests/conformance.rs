@@ -36,7 +36,7 @@
 mod common;
 
 use common::{
-    build_units, hq_slice_bytes, picture_body, sequence_header_body_full, PicParams, SignalRange,
+    PicParams, SignalRange, build_units, hq_slice_bytes, picture_body, sequence_header_body_full,
 };
 
 /// Deterministic LCG coefficients in `[-amp, amp]` (the generator the

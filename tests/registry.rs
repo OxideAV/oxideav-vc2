@@ -8,8 +8,8 @@
 mod common;
 
 use common::{
-    build_units, fragment_data_body, fragment_setup_body, hq_slice_bytes, parse_info, picture_body,
-    sequence_header_body, sequence_header_body_full, PicParams, SignalRange,
+    PicParams, SignalRange, build_units, fragment_data_body, fragment_setup_body, hq_slice_bytes,
+    parse_info, picture_body, sequence_header_body, sequence_header_body_full,
 };
 use oxideav_core::{
     CodecId, CodecParameters, CodecResolver, CodecTag, Error, Frame, Packet, ProbeContext,
@@ -299,7 +299,9 @@ fn fragmented_16bit_picture_spans_packets() {
     assert_eq!(v.planes[0].stride, 8); // 4 samples/row * 2 bytes
     let words: Vec<u16> = v.planes[0]
         .data
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|b| u16::from_le_bytes([b[0], b[1]]))
         .collect();
     let q = values.map(|v| (v + 32768) as u16);
@@ -311,10 +313,14 @@ fn fragmented_16bit_picture_spans_packets() {
         q[2], q[2], q[3], q[3],
     ];
     assert_eq!(words, expect);
-    assert!(v.planes[1]
-        .data
-        .chunks_exact(2)
-        .all(|b| u16::from_le_bytes([b[0], b[1]]) == 32768));
+    assert!(
+        v.planes[1]
+            .data
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .all(|b| u16::from_le_bytes([b[0], b[1]]) == 32768)
+    );
 }
 
 #[test]
@@ -361,7 +367,9 @@ fn decode_words(range: SignalRange, y: &[i64; 4], c1: &[i64; 4], c2: &[i64; 4]) 
         .map(|p| {
             assert_eq!(p.stride, 4); // 2 samples/row * 2 bytes
             p.data
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|b| u16::from_le_bytes([b[0], b[1]]))
                 .collect()
         })
@@ -506,7 +514,9 @@ fn decode_frame(range: SignalRange, y: &[i64; 4], c1: &[i64; 4], c2: &[i64; 4]) 
 
 fn le_words(p: &oxideav_core::VideoPlane) -> Vec<u16> {
     p.data
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|b| u16::from_le_bytes([b[0], b[1]]))
         .collect()
 }
@@ -788,7 +798,9 @@ fn preset7_422_subsampling_maps_to_yuv422p16() {
     assert_eq!(v.planes[1].data.len(), 4); // 1x2 samples, 2 bytes each
     let words = |p: &oxideav_core::VideoPlane| -> Vec<u16> {
         p.data
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|b| u16::from_le_bytes([b[0], b[1]]))
             .collect()
     };
@@ -840,7 +852,9 @@ fn depth_switch_across_sequences_repacks_frames() {
     assert_eq!(second.planes[0].stride, 4); // 16-bit: LE word planes
     let words: Vec<u16> = second.planes[0]
         .data
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|b| u16::from_le_bytes([b[0], b[1]]))
         .collect();
     assert_eq!(words, y16.map(|v| (v + 32768) as u16).to_vec());
@@ -873,7 +887,9 @@ fn extradata_16bit_sequence_header_primes_the_decoder() {
     };
     let words: Vec<u16> = v.planes[0]
         .data
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|b| u16::from_le_bytes([b[0], b[1]]))
         .collect();
     assert_eq!(words, y.map(|v| (v + 32768) as u16).to_vec());

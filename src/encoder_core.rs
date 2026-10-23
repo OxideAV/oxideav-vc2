@@ -24,8 +24,8 @@
 //! require one of the byte-target modes.
 
 use oxideav_core::{
-    parse_options, CodecParameters, Encoder, Frame, OptionField, OptionKind, OptionValue, Packet,
-    PixelFormat,
+    CodecParameters, Encoder, Frame, OptionField, OptionKind, OptionValue, Packet, PixelFormat,
+    parse_options,
 };
 
 use crate::encoder::{EncoderConfig, PictureInput, RateControl, SequenceEncoder};
@@ -244,7 +244,7 @@ impl Vc2Encoder {
             _ => {
                 return Err(oxideav_core::Error::invalid(
                     "vc2: encoder requires width and height",
-                ))
+                ));
             }
         };
         let pf = params
@@ -277,11 +277,12 @@ impl Vc2Encoder {
         if opts.fragment_slices > 0 {
             cfg.fragment_slices = Some(opts.fragment_slices.min(u16::MAX as u32) as u16);
         }
-        if let Some(fr) = params.frame_rate {
-            if fr.num > 0 && fr.den > 0 {
-                cfg.video_parameters.frame_rate_numer = fr.num as u64;
-                cfg.video_parameters.frame_rate_denom = fr.den as u64;
-            }
+        if let Some(fr) = params.frame_rate
+            && fr.num > 0
+            && fr.den > 0
+        {
+            cfg.video_parameters.frame_rate_numer = fr.num as u64;
+            cfg.video_parameters.frame_rate_denom = fr.den as u64;
         }
         cfg.rate = if opts.qindex >= 0 {
             RateControl::FixedQuantIndex(opts.qindex as u64)
@@ -340,7 +341,7 @@ impl Vc2Encoder {
         for y in 0..h {
             let src = &plane.data[y * plane.stride..y * plane.stride + row];
             if self.words {
-                for pair in src.chunks_exact(2) {
+                for pair in src.as_chunks::<2>().0 {
                     out.push(u16::from_le_bytes([pair[0], pair[1]]) & mask);
                 }
             } else {

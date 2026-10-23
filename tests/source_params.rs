@@ -7,10 +7,10 @@
 
 mod common;
 
-use common::{header_body, HeaderSpec};
-use oxideav_vc2::bitio::BitReader;
-use oxideav_vc2::params::{sequence_header, SequenceHeader};
+use common::{HeaderSpec, header_body};
 use oxideav_vc2::Error;
+use oxideav_vc2::bitio::BitReader;
+use oxideav_vc2::params::{SequenceHeader, sequence_header};
 
 fn parse(spec: &HeaderSpec) -> Result<SequenceHeader, Error> {
     let body = header_body(spec);
@@ -233,11 +233,13 @@ fn out_of_range_indices_and_degenerate_values_are_rejected() {
     }
     // Transfer-function index 5 (Table 14's HLG row, past the stale
     // prose bound) is legal.
-    assert!(parse(&HeaderSpec {
-        color_spec_custom: Some((None, None, Some(5))),
-        ..base
-    })
-    .is_ok());
+    assert!(
+        parse(&HeaderSpec {
+            color_spec_custom: Some((None, None, Some(5))),
+            ..base
+        })
+        .is_ok()
+    );
 }
 
 #[test]
@@ -265,7 +267,7 @@ fn signalled_clean_area_must_fit_the_frame() {
 
 #[test]
 fn sequence_decoder_exposes_the_header_mid_sequence() {
-    use common::{build_units, hq_slice_bytes, picture_body, PicParams};
+    use common::{PicParams, build_units, hq_slice_bytes, picture_body};
     use oxideav_vc2::SequenceDecoder;
 
     let p = PicParams::hq_depth0();

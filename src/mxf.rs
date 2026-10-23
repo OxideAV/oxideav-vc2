@@ -349,7 +349,7 @@ pub fn sub_descriptor_values(data: &[u8]) -> Result<SubDescriptorValues> {
                     Some(prev) if prev != sc => {
                         return Err(Error::InvalidValue(
                             "wrapped stream varies version/profile/level across sequence headers",
-                        ))
+                        ));
                     }
                     Some(_) => {}
                 }
@@ -508,7 +508,9 @@ mod tests {
             let ul = sub_descriptor_item_ul(item);
             assert_eq!(
                 &ul[..12],
-                &[0x06, 0x0E, 0x2B, 0x34, 0x01, 0x01, 0x01, 0x0E, 0x04, 0x01, 0x06, 0x07]
+                &[
+                    0x06, 0x0E, 0x2B, 0x34, 0x01, 0x01, 0x01, 0x0E, 0x04, 0x01, 0x06, 0x07
+                ]
             );
             assert_eq!(ul[12], nn);
             assert_eq!(&ul[13..], &[0x00, 0x00, 0x00]);

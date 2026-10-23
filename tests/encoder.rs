@@ -7,8 +7,8 @@
 use oxideav_vc2::conformance;
 use oxideav_vc2::params::ColorDiffFormat;
 use oxideav_vc2::{
-    encode_sequence, DecodedPicture, EncoderConfig, PictureInput, PictureKind, RateControl,
-    SequenceEncoder,
+    DecodedPicture, EncoderConfig, PictureInput, PictureKind, RateControl, SequenceEncoder,
+    encode_sequence,
 };
 
 /// Deterministic test picture: a smooth gradient plus LCG noise, so the
@@ -484,13 +484,14 @@ fn low_delay_rejects_lossless_and_bad_planes_are_refused() {
     let cfg = EncoderConfig::new(16, 16, ColorDiffFormat::Yuv444, 8);
     let mut enc = SequenceEncoder::new(cfg).unwrap();
     let short = [0u16; 10];
-    assert!(enc
-        .encode_picture(&PictureInput {
+    assert!(
+        enc.encode_picture(&PictureInput {
             y: &short,
             c1: &short,
             c2: &short
         })
-        .is_err());
+        .is_err()
+    );
 }
 
 #[test]

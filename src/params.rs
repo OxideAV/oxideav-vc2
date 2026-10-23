@@ -154,7 +154,7 @@ fn preset_signal_range(index: u64) -> Result<(u64, u64, u64, u64)> {
         _ => {
             return Err(Error::InvalidValue(
                 "signal range preset index out of 1..=8",
-            ))
+            ));
         }
     })
 }
@@ -401,7 +401,7 @@ fn preset_pixel_aspect_ratio(index: u64) -> Result<(u64, u64)> {
         _ => {
             return Err(Error::InvalidValue(
                 "pixel aspect ratio preset index out of 1..=6",
-            ))
+            ));
         }
     })
 }
@@ -503,7 +503,7 @@ fn preset_color_spec(index: u64) -> Result<(u64, u64, u64)> {
         _ => {
             return Err(Error::InvalidValue(
                 "color specification preset index out of 0..=7",
-            ))
+            ));
         }
     })
 }

@@ -30,13 +30,13 @@
 //! Every emitted stream round-trips through this crate's decoder and, for
 //! `RateControl::Lossless`, reproduces the input samples bit-exactly.
 
-use crate::bitio::{sint_code_len, BitWriter};
+use crate::bitio::{BitWriter, sint_code_len};
 use crate::conformance::{self, Violation};
 use crate::params::{self, ColorDiffFormat, SequenceHeader, VideoParameters};
-use crate::quant::{self, forward_quant, inverse_quant, MatrixLevel};
+use crate::quant::{self, MatrixLevel, forward_quant, inverse_quant};
 use crate::sequence::PARSE_INFO_PREFIX;
 use crate::transform::{
-    self, subband_layout, ComponentCoeffs, Orient, PictureKind, TransformParameters,
+    self, ComponentCoeffs, Orient, PictureKind, TransformParameters, subband_layout,
 };
 use crate::wavelet::Plane;
 use crate::{Error, Result};
@@ -851,10 +851,10 @@ impl SequenceEncoder {
             (PictureKind::LowDelay, RateControl::Lossless | RateControl::FixedQuantIndex(_)) => {
                 return Err(Error::Unsupported(
                     "low-delay pictures have fixed-size slices: use PictureBytes or BitsPerSecond",
-                ))
+                ));
             }
             (PictureKind::HighQuality, RateControl::FixedQuantIndex(q)) if q > HQ_MAX_QINDEX => {
-                return Err(Error::InvalidValue("quantisation index above 255"))
+                return Err(Error::InvalidValue("quantisation index above 255"));
             }
             _ => {}
         }

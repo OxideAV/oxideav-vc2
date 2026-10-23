@@ -106,11 +106,11 @@ pub mod sequence;
 pub mod transform;
 pub mod wavelet;
 
-pub use encoder::{encode_sequence, EncoderConfig, PictureInput, RateControl, SequenceEncoder};
+pub use encoder::{EncoderConfig, PictureInput, RateControl, SequenceEncoder, encode_sequence};
 pub use error::{Error, Result};
 pub use picture::DecodedPicture;
 pub use sequence::{
-    classify, DataUnit, FragmentHeader, ParseInfo, SequenceDecoder, PARSE_INFO_PREFIX,
+    DataUnit, FragmentHeader, PARSE_INFO_PREFIX, ParseInfo, SequenceDecoder, classify,
 };
 pub use transform::PictureKind;
 
@@ -133,12 +133,12 @@ pub mod decoder;
 pub mod encoder_core;
 
 #[cfg(feature = "registry")]
-pub use encoder_core::{make_encoder, Vc2Encoder, Vc2EncoderOptions};
+pub use encoder_core::{Vc2Encoder, Vc2EncoderOptions, make_encoder};
 
 #[cfg(feature = "registry")]
 pub use decoder::{
-    make_decoder, register, Vc2Decoder, CODEC_ID, MATROSKA_CODEC_ID, MP4_OBJECT_TYPE,
-    MP4_SAMPLE_ENTRY,
+    CODEC_ID, MATROSKA_CODEC_ID, MP4_OBJECT_TYPE, MP4_SAMPLE_ENTRY, Vc2Decoder, make_decoder,
+    register,
 };
 
 #[cfg(feature = "registry")]

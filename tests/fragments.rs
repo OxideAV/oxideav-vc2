@@ -12,10 +12,10 @@
 mod common;
 
 use common::{
-    build_units, fragment_data_body, fragment_setup_body, hq_slice_bytes, ld_slice_bytes,
-    picture_body, sequence_header_body, sequence_header_body_full, PicParams, SignalRange,
+    PicParams, SignalRange, build_units, fragment_data_body, fragment_setup_body, hq_slice_bytes,
+    ld_slice_bytes, picture_body, sequence_header_body, sequence_header_body_full,
 };
-use oxideav_vc2::{decode_sequence, DecodedPicture, Error, SequenceDecoder};
+use oxideav_vc2::{DecodedPicture, Error, SequenceDecoder, decode_sequence};
 
 /// 4x4 HQ picture, depth 0 (identity IDWT), 2x2 slices, qindex 0. Each
 /// slice covers a 2x2 quadrant of every component. Returns the picture

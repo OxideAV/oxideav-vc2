@@ -77,11 +77,7 @@ pub fn inverse_quant(quantized_coeff: i64, quant_index: u64) -> i64 {
 pub fn forward_quant(coeff: i64, quant_index: u64) -> i64 {
     let magnitude = coeff.unsigned_abs() as u128 * 4 / quant_factor(quant_index) as u128;
     let magnitude = magnitude.min(i64::MAX as u128) as i64;
-    if coeff < 0 {
-        -magnitude
-    } else {
-        magnitude
-    }
+    if coeff < 0 { -magnitude } else { magnitude }
 }
 
 /// Orientation key within the default-matrix table.

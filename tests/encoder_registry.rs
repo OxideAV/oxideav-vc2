@@ -71,10 +71,11 @@ fn registry_advertises_and_builds_the_encoder() {
     let mut ctx = RuntimeContext::new();
     oxideav_vc2::register(&mut ctx);
     assert!(ctx.codecs.has_encoder(&CodecId::new("vc2")));
-    assert!(ctx
-        .codecs
-        .encoder_options_schema(&CodecId::new("vc2"))
-        .is_some_and(|s| s.iter().any(|f| f.name == "qindex")));
+    assert!(
+        ctx.codecs
+            .encoder_options_schema(&CodecId::new("vc2"))
+            .is_some_and(|s| s.iter().any(|f| f.name == "qindex"))
+    );
     let mut enc = ctx
         .codecs
         .first_encoder(&enc_params(16, 8, PixelFormat::Yuv444P))

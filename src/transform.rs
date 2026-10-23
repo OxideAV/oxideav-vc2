@@ -4,7 +4,7 @@
 
 use crate::bitio::BitReader;
 use crate::params::SequenceHeader;
-use crate::quant::{self, inverse_quant, MatrixLevel};
+use crate::quant::{self, MatrixLevel, inverse_quant};
 use crate::wavelet::{self, Plane, WaveletFilter};
 use crate::{Error, Result};
 
@@ -156,7 +156,7 @@ pub fn transform_parameters(
             _ => {
                 return Err(Error::InvalidValue(
                     "padded picture area exceeds the implementation cap",
-                ))
+                ));
             }
         }
     }
@@ -172,7 +172,7 @@ pub fn transform_parameters(
         _ => {
             return Err(Error::InvalidValue(
                 "slice count exceeds the implementation cap",
-            ))
+            ));
         }
     }
     let mut slice_bytes_numerator = 0;
@@ -890,7 +890,7 @@ mod tests {
     #[test]
     fn slice_bytes_distributes_remainder() {
         let tp = test_tp(0, 1, 5, 2); // 5/2 bytes per slice across 4 slices
-                                      // slice 0: (1*5)//2 - 0 = 2; slice 1: (2*5)//2 - (1*5)//2 = 5-2=3; etc.
+        // slice 0: (1*5)//2 - 0 = 2; slice 1: (2*5)//2 - (1*5)//2 = 5-2=3; etc.
         assert_eq!(slice_bytes(&tp, 0, 0), 2);
         assert_eq!(slice_bytes(&tp, 1, 0), 3);
     }

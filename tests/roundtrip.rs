@@ -11,8 +11,8 @@
 mod common;
 
 use common::{
-    build_units, fragment_data_body, hq_slice_bytes, picture_body, sequence_header_body,
-    sequence_header_body_full, PicParams, SignalRange,
+    PicParams, SignalRange, build_units, fragment_data_body, hq_slice_bytes, picture_body,
+    sequence_header_body, sequence_header_body_full,
 };
 
 /// Assemble a full sequence: PI(seq header) seq_header PI(HQ) picture PI(EOS).
@@ -74,7 +74,7 @@ fn hq_asymmetric_mixed_pair_uses_table_d8_defaults() {
     // assignment, HO synthesis stage — rather than re-deriving the filter
     // math (covered by the wavelet reversibility tests).
     use oxideav_vc2::quant::inverse_quant;
-    use oxideav_vc2::wavelet::{h_synthesis, wavelet_filter, Plane};
+    use oxideav_vc2::wavelet::{Plane, h_synthesis, wavelet_filter};
 
     let p = PicParams {
         major_version: 3,

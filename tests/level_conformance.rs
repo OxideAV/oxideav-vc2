@@ -7,13 +7,13 @@
 mod common;
 
 use common::{
-    build_units, fragment_setup_body, header_body, hq_slice_bytes, picture_body, HeaderSpec,
-    PicParams,
+    HeaderSpec, PicParams, build_units, fragment_setup_body, header_body, hq_slice_bytes,
+    picture_body,
 };
 use oxideav_vc2::bitio::BitReader;
 use oxideav_vc2::conformance::{
-    check_sequence_header, check_stream, check_transform_parameters, level_base_video_formats,
-    Violation,
+    Violation, check_sequence_header, check_stream, check_transform_parameters,
+    level_base_video_formats,
 };
 use oxideav_vc2::params::sequence_header;
 

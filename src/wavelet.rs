@@ -392,7 +392,7 @@ pub fn vh_synthesis(
 /// [`oned_analysis`] over every row, and de-interleave even columns into
 /// `L` and odd columns into `H`. `plane.width` must be even.
 pub fn h_analysis(plane: &Plane, filter_ho: &WaveletFilter) -> (Plane, Plane) {
-    debug_assert!(plane.width % 2 == 0);
+    debug_assert!(plane.width.is_multiple_of(2));
     let half = plane.width / 2;
     let mut l = Plane::new(half, plane.height);
     let mut h = Plane::new(half, plane.height);
@@ -420,7 +420,7 @@ pub fn vh_analysis(
     filter_v: &WaveletFilter,
     filter_ho: &WaveletFilter,
 ) -> (Plane, Plane, Plane, Plane) {
-    debug_assert!(plane.width % 2 == 0 && plane.height % 2 == 0);
+    debug_assert!(plane.width.is_multiple_of(2) && plane.height.is_multiple_of(2));
     let (width, height) = (plane.width, plane.height);
     let mut work = Plane::new(width, height);
     for (dst, &src) in work.data.iter_mut().zip(&plane.data) {

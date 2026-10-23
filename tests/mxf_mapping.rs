@@ -5,11 +5,11 @@
 mod common;
 
 use common::{
-    build_units, header_body, hq_slice_bytes, picture_body, HeaderSpec, PicParams, SignalRange,
+    HeaderSpec, PicParams, SignalRange, build_units, header_body, hq_slice_bytes, picture_body,
 };
 use oxideav_vc2::bitio::BitReader;
 use oxideav_vc2::mxf::{
-    self, frame_layout, recommended_video_line_map, stored_dimensions, FrameLayout,
+    self, FrameLayout, frame_layout, recommended_video_line_map, stored_dimensions,
 };
 use oxideav_vc2::params::sequence_header;
 

@@ -41,7 +41,7 @@
 //!   and the §14 unit framing, both round-trip-tested).
 
 use oxideav_vc2::params::ColorDiffFormat;
-use oxideav_vc2::{encode_sequence, EncoderConfig, PictureInput, PictureKind, RateControl};
+use oxideav_vc2::{EncoderConfig, PictureInput, PictureKind, RateControl, encode_sequence};
 
 /// The deterministic test picture every fixture was encoded from
 /// (gradient + LCG noise, seed 42) — byte-identical to the generator

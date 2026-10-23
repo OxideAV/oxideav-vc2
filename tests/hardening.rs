@@ -5,10 +5,10 @@
 mod common;
 
 use common::{
-    build_units, hq_slice_bytes, parse_info, picture_body, sequence_header_body,
-    sequence_header_body_full, PicParams, SignalRange,
+    PicParams, SignalRange, build_units, hq_slice_bytes, parse_info, picture_body,
+    sequence_header_body, sequence_header_body_full,
 };
-use oxideav_vc2::{decode_sequence, Error};
+use oxideav_vc2::{Error, decode_sequence};
 
 /// A well-formed single-picture stream to truncate at every length.
 fn good_stream() -> Vec<u8> {
@@ -366,7 +366,7 @@ fn pseudo_random_garbage_never_panics() {
 /// a colour spec with all three per-part overrides — so the retained
 /// display-metadata fields all sit on the wire as cut and flip targets.
 fn full_metadata_stream() -> Vec<u8> {
-    use common::{header_body, HeaderSpec};
+    use common::{HeaderSpec, header_body};
     let p = PicParams::hq_depth0();
     let y = [5i64, -6, 7, -8];
     let c = [0i64; 2];

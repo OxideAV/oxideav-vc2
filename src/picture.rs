@@ -1,11 +1,11 @@
 //! Picture parsing (§12) and decoding (§15) — the per-picture pipeline that
 //! turns a picture data unit into clipped, offset component planes.
 
+use crate::Result;
 use crate::bitio::BitReader;
 use crate::params::SequenceHeader;
 use crate::transform::{self, PictureKind, TransformData, TransformParameters};
 use crate::wavelet::Plane;
-use crate::Result;
 
 /// A fully decoded picture: three planes of unsigned sample values plus the
 /// picture number from the picture header (§12.2).

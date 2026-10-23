@@ -461,13 +461,13 @@ pub fn check_stream(data: &[u8]) -> Result<Vec<Violation>> {
 
         // Annex C profile constraint on every data unit of the current
         // sequence (checkable once its header names the profile).
-        if let Some(s) = &seq {
-            if let Some(false) = profile_allows(s.parse_parameters.profile, pi.parse_code) {
-                violations.push(Violation::ProfileParseCode {
-                    profile: s.parse_parameters.profile,
-                    parse_code: pi.parse_code,
-                });
-            }
+        if let Some(s) = &seq
+            && let Some(false) = profile_allows(s.parse_parameters.profile, pi.parse_code)
+        {
+            violations.push(Violation::ProfileParseCode {
+                profile: s.parse_parameters.profile,
+                parse_code: pi.parse_code,
+            });
         }
 
         match unit {
@@ -513,13 +513,15 @@ pub fn check_stream(data: &[u8]) -> Result<Vec<Violation>> {
             DataUnit::AuxiliaryData | DataUnit::Padding | DataUnit::Reserved => {}
         }
 
-        if !mixed_flagged && saw_picture && saw_fragment {
-            if let Some(s) = &seq {
-                let level = s.parse_parameters.level;
-                if (1..=7).contains(&level) {
-                    violations.push(Violation::MixedPictureAndFragmentUnits { level });
-                    mixed_flagged = true;
-                }
+        if !mixed_flagged
+            && saw_picture
+            && saw_fragment
+            && let Some(s) = &seq
+        {
+            let level = s.parse_parameters.level;
+            if (1..=7).contains(&level) {
+                violations.push(Violation::MixedPictureAndFragmentUnits { level });
+                mixed_flagged = true;
             }
         }
 

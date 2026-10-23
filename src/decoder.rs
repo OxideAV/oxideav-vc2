@@ -43,9 +43,9 @@ use oxideav_core::{
     Packet, PixelFormat, ProbeContext, RuntimeContext, VideoFrame, VideoPlane,
 };
 
-use crate::picture::DecodedPicture;
-use crate::sequence::{classify, DataUnit, SequenceDecoder};
 use crate::PARSE_INFO_PREFIX;
+use crate::picture::DecodedPicture;
+use crate::sequence::{DataUnit, SequenceDecoder, classify};
 
 /// Registry identifier this crate claims.
 pub const CODEC_ID: &str = "vc2";
@@ -741,7 +741,9 @@ mod tests {
         assert_eq!(p.stride, 8);
         let words: Vec<u16> = p
             .data
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|b| u16::from_le_bytes([b[0], b[1]]))
             .collect();
         assert_eq!(words, vec![0, 8, 32768, 65528]);
