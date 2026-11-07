@@ -5,6 +5,13 @@ on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.0.3](https://github.com/OxideAV/oxideav-vc2/compare/v0.0.2...v0.0.3) - 2026-11-07
+
+### Other
+
+- API hygiene: #[non_exhaustive] on growable enums + config / header records, setters and constructors, hide DSP modules
+- edition 2024, MSRV 1.95
+
 ### Added
 
 - `with_<field>` setters on `EncoderConfig`, `PictureInput`, `Vc2EncoderOptions`, `params::SourceOverrides` and `params::ParseParameters`; `new(..)` (every field, in declaration order) on `PictureInput`, `params::VideoParameters`, `params::SequenceHeader` and `picture::ParsedPicture`; `Default` on `PictureInput`, `SubDescriptorValues`, `CodingParameters`, `DecodedPicture`, `ParseInfo`, `FragmentHeader`.
