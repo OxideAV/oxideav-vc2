@@ -92,6 +92,7 @@ pub const SUB_DESCRIPTOR_KEY: [u8; 16] = [
 /// Table 3), each identified by an item UL
 /// `06.0E.2B.34.01.01.01.0E.04.01.06.07.NN.00.00.00`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SubDescriptorItem {
     /// UInt8, required.
     MajorVersion,
@@ -294,7 +295,8 @@ pub fn color_primaries_label(color_primaries_index: u64) -> Option<[u8; 16]> {
 /// wrapped VC-2 stream. `EditUnitsAreCompleteSequences` needs the edit
 /// unit boundaries — information the elementary stream does not carry —
 /// so it is not derived here.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub struct SubDescriptorValues {
     pub major_version: u64,
     pub minor_version: u64,

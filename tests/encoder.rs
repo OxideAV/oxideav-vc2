@@ -56,11 +56,7 @@ fn test_picture(
 
 impl TestPicture {
     fn input(&self) -> PictureInput<'_> {
-        PictureInput {
-            y: &self.y,
-            c1: &self.c1,
-            c2: &self.c2,
-        }
+        PictureInput::new(&self.y, &self.c1, &self.c2)
     }
 
     fn assert_exact(&self, pic: &DecodedPicture) {
@@ -244,11 +240,7 @@ fn low_delay_dc_prediction_matches_decoder_at_coarse_quant() {
     assert!(psnr > 18.0, "psnr {psnr}");
     let again = encode_sequence(
         cfg,
-        &[PictureInput {
-            y: &first[0].y,
-            c1: &first[0].c1,
-            c2: &first[0].c2,
-        }],
+        &[PictureInput::new(&first[0].y, &first[0].c1, &first[0].c2)],
     )
     .expect("re-encode");
     let second = decode_clean(&again);
@@ -485,12 +477,8 @@ fn low_delay_rejects_lossless_and_bad_planes_are_refused() {
     let mut enc = SequenceEncoder::new(cfg).unwrap();
     let short = [0u16; 10];
     assert!(
-        enc.encode_picture(&PictureInput {
-            y: &short,
-            c1: &short,
-            c2: &short
-        })
-        .is_err()
+        enc.encode_picture(&PictureInput::new(&short, &short, &short))
+            .is_err()
     );
 }
 

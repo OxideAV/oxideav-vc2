@@ -28,6 +28,7 @@ use crate::{Error, Result};
 /// A profile or level conformance violation, each tied to the clause it
 /// breaks. `Display` spells out the rule.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Violation {
     /// ST 2042-1 Annex C.2.1: the profile value is not one this version
     /// defines (0 = low delay, 3 = high quality). Values 1 and 2 name

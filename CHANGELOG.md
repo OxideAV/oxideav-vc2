@@ -5,6 +5,15 @@ on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `with_<field>` setters on `EncoderConfig`, `PictureInput`, `Vc2EncoderOptions`, `params::SourceOverrides` and `params::ParseParameters`; `new(..)` (every field, in declaration order) on `PictureInput`, `params::VideoParameters`, `params::SequenceHeader` and `picture::ParsedPicture`; `Default` on `PictureInput`, `SubDescriptorValues`, `CodingParameters`, `DecodedPicture`, `ParseInfo`, `FragmentHeader`.
+
+### Changed
+
+- `#[non_exhaustive]` on the growable enums `Error`, `RateControl`, `conformance::Violation`, `mxf::SubDescriptorItem` and `sequence::DataUnit`, and on the records `EncoderConfig`, `PictureInput`, `Vc2EncoderOptions`, `DecodedPicture`, `mxf::SubDescriptorValues`, `params::VideoParameters`, `params::SourceOverrides`, `params::ParseParameters`, `params::CodingParameters`, `params::SequenceHeader`, `picture::ParsedPicture`, `sequence::ParseInfo`, `sequence::FragmentHeader`. `PictureKind` (LD / HQ), `params::ColorDiffFormat`, `mxf::Wrapping` and `mxf::FrameLayout` stay exhaustive: the specifications fix their value sets.
+- `#[doc(hidden)]` on the internal `bitio`, `quant`, `transform` and `wavelet` modules (bit I/O, quantisation matrices, transform data and lifting kernels; `PictureKind` stays documented through its root re-export).
+
 ### Changed
 
 - edition 2024, MSRV 1.95

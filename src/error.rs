@@ -6,6 +6,7 @@ use core::fmt;
 
 /// Errors surfaced while parsing or decoding a VC-2 stream.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Error {
     /// The stream ended before a structure was fully read.
     UnexpectedEof,

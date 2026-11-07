@@ -51,6 +51,7 @@ const HQ_MAX_QINDEX: u64 = 255;
 
 /// How the encoder chooses quantisation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum RateControl {
     /// Quantisation index 0 everywhere: the lifting transforms are
     /// integer-reversible and index 0 is the identity quantiser, so the
@@ -73,6 +74,7 @@ pub enum RateControl {
 /// Encoder configuration: the §11 video parameters plus the transform,
 /// slice and rate choices.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct EncoderConfig {
     /// Annex B base video format the sequence header is expressed
     /// against; every field of `video_parameters` that differs from the
@@ -118,6 +120,120 @@ pub struct EncoderConfig {
     /// followed by data fragments carrying `n` slices each (the last may
     /// carry fewer). `None` codes plain picture data units.
     pub fragment_slices: Option<u16>,
+}
+
+impl EncoderConfig {
+    /// Set `base_video_format`.
+    #[must_use]
+    pub fn with_base_video_format(mut self, base_video_format: u64) -> Self {
+        self.base_video_format = base_video_format;
+        self
+    }
+
+    /// Set `video_parameters`.
+    #[must_use]
+    pub fn with_video_parameters(mut self, video_parameters: VideoParameters) -> Self {
+        self.video_parameters = video_parameters;
+        self
+    }
+
+    /// Set `picture_coding_mode`.
+    #[must_use]
+    pub fn with_picture_coding_mode(mut self, picture_coding_mode: u64) -> Self {
+        self.picture_coding_mode = picture_coding_mode;
+        self
+    }
+
+    /// Set `level`.
+    #[must_use]
+    pub fn with_level(mut self, level: u64) -> Self {
+        self.level = level;
+        self
+    }
+
+    /// Set `kind`.
+    #[must_use]
+    pub fn with_kind(mut self, kind: PictureKind) -> Self {
+        self.kind = kind;
+        self
+    }
+
+    /// Set `wavelet_index`.
+    #[must_use]
+    pub fn with_wavelet_index(mut self, wavelet_index: u64) -> Self {
+        self.wavelet_index = wavelet_index;
+        self
+    }
+
+    /// Set `dwt_depth`.
+    #[must_use]
+    pub fn with_dwt_depth(mut self, dwt_depth: u64) -> Self {
+        self.dwt_depth = dwt_depth;
+        self
+    }
+
+    /// Set `wavelet_index_ho`.
+    #[must_use]
+    pub fn with_wavelet_index_ho(mut self, wavelet_index_ho: u64) -> Self {
+        self.wavelet_index_ho = wavelet_index_ho;
+        self
+    }
+
+    /// Set `dwt_depth_ho`.
+    #[must_use]
+    pub fn with_dwt_depth_ho(mut self, dwt_depth_ho: u64) -> Self {
+        self.dwt_depth_ho = dwt_depth_ho;
+        self
+    }
+
+    /// Set `slices_x`.
+    #[must_use]
+    pub fn with_slices_x(mut self, slices_x: u64) -> Self {
+        self.slices_x = slices_x;
+        self
+    }
+
+    /// Set `slices_y`.
+    #[must_use]
+    pub fn with_slices_y(mut self, slices_y: u64) -> Self {
+        self.slices_y = slices_y;
+        self
+    }
+
+    /// Set `quant_matrix`.
+    #[must_use]
+    pub fn with_quant_matrix(mut self, quant_matrix: Option<Vec<MatrixLevel>>) -> Self {
+        self.quant_matrix = quant_matrix;
+        self
+    }
+
+    /// Set `slice_prefix_bytes`.
+    #[must_use]
+    pub fn with_slice_prefix_bytes(mut self, slice_prefix_bytes: u64) -> Self {
+        self.slice_prefix_bytes = slice_prefix_bytes;
+        self
+    }
+
+    /// Set `slice_size_scaler`.
+    #[must_use]
+    pub fn with_slice_size_scaler(mut self, slice_size_scaler: u64) -> Self {
+        self.slice_size_scaler = slice_size_scaler;
+        self
+    }
+
+    /// Set `rate`.
+    #[must_use]
+    pub fn with_rate(mut self, rate: RateControl) -> Self {
+        self.rate = rate;
+        self
+    }
+
+    /// Set `fragment_slices`.
+    #[must_use]
+    pub fn with_fragment_slices(mut self, fragment_slices: Option<u16>) -> Self {
+        self.fragment_slices = fragment_slices;
+        self
+    }
 }
 
 impl EncoderConfig {
@@ -237,11 +353,42 @@ impl EncoderConfig {
 /// the sequence's coding dimensions (`luma_width × luma_height`, the
 /// colour-difference planes at `color_diff_width × color_diff_height`;
 /// fields when `picture_coding_mode == 1`).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
+#[non_exhaustive]
 pub struct PictureInput<'a> {
     pub y: &'a [u16],
     pub c1: &'a [u16],
     pub c2: &'a [u16],
+}
+
+impl<'a> PictureInput<'a> {
+    /// Build `PictureInput` from every field, in declaration order.
+    pub fn new(y: &'a [u16], c1: &'a [u16], c2: &'a [u16]) -> Self {
+        Self { y, c1, c2 }
+    }
+}
+
+impl<'a> PictureInput<'a> {
+    /// Set `y`.
+    #[must_use]
+    pub fn with_y(mut self, y: &'a [u16]) -> Self {
+        self.y = y;
+        self
+    }
+
+    /// Set `c1`.
+    #[must_use]
+    pub fn with_c1(mut self, c1: &'a [u16]) -> Self {
+        self.c1 = c1;
+        self
+    }
+
+    /// Set `c2`.
+    #[must_use]
+    pub fn with_c2(mut self, c2: &'a [u16]) -> Self {
+        self.c2 = c2;
+        self
+    }
 }
 
 /// The §11.4 override plan for a sequence header: which custom flags are

@@ -51,6 +51,7 @@ impl ColorDiffFormat {
 /// (frame rate for edit rates, aspect ratio / clean area for display
 /// sizing, colour specification for descriptor labels).
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub struct VideoParameters {
     pub frame_width: u64,
     pub frame_height: u64,
@@ -91,12 +92,63 @@ pub struct VideoParameters {
     pub transfer_function_index: u64,
 }
 
+impl VideoParameters {
+    /// Build `VideoParameters` from every field, in declaration order.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        frame_width: u64,
+        frame_height: u64,
+        color_diff_format: ColorDiffFormat,
+        source_sampling: u64,
+        top_field_first: bool,
+        frame_rate_numer: u64,
+        frame_rate_denom: u64,
+        pixel_aspect_ratio_numer: u64,
+        pixel_aspect_ratio_denom: u64,
+        clean_width: u64,
+        clean_height: u64,
+        left_offset: u64,
+        top_offset: u64,
+        luma_offset: u64,
+        luma_excursion: u64,
+        color_diff_offset: u64,
+        color_diff_excursion: u64,
+        color_primaries_index: u64,
+        color_matrix_index: u64,
+        transfer_function_index: u64,
+    ) -> Self {
+        Self {
+            frame_width,
+            frame_height,
+            color_diff_format,
+            source_sampling,
+            top_field_first,
+            frame_rate_numer,
+            frame_rate_denom,
+            pixel_aspect_ratio_numer,
+            pixel_aspect_ratio_denom,
+            clean_width,
+            clean_height,
+            left_offset,
+            top_offset,
+            luma_offset,
+            luma_excursion,
+            color_diff_offset,
+            color_diff_excursion,
+            color_primaries_index,
+            color_matrix_index,
+            transfer_function_index,
+        }
+    }
+}
+
 /// Record of which §11.4 custom flags a sequence header set, plus the
 /// indices it signalled — exactly the signalling the ST 2042-2
 /// generalized-level constraints (its §5.3) are phrased against. Field
 /// names follow that clause. `Default` is the all-defaults header (every
 /// flag `false`, no indices).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct SourceOverrides {
     /// §11.4.3 frame-size override flag.
     pub custom_dimensions_flag: bool,
@@ -126,6 +178,95 @@ pub struct SourceOverrides {
     /// Colour-spec index signalled when the flag is set (0 = custom,
     /// with optional per-part overrides; 1..=7 = Table 11 preset).
     pub color_spec_index: Option<u64>,
+}
+
+impl SourceOverrides {
+    /// Set `custom_dimensions_flag`.
+    #[must_use]
+    pub fn with_custom_dimensions_flag(mut self, custom_dimensions_flag: bool) -> Self {
+        self.custom_dimensions_flag = custom_dimensions_flag;
+        self
+    }
+
+    /// Set `custom_chroma_format_flag`.
+    #[must_use]
+    pub fn with_custom_chroma_format_flag(mut self, custom_chroma_format_flag: bool) -> Self {
+        self.custom_chroma_format_flag = custom_chroma_format_flag;
+        self
+    }
+
+    /// Set `custom_scan_format_flag`.
+    #[must_use]
+    pub fn with_custom_scan_format_flag(mut self, custom_scan_format_flag: bool) -> Self {
+        self.custom_scan_format_flag = custom_scan_format_flag;
+        self
+    }
+
+    /// Set `custom_frame_rate_flag`.
+    #[must_use]
+    pub fn with_custom_frame_rate_flag(mut self, custom_frame_rate_flag: bool) -> Self {
+        self.custom_frame_rate_flag = custom_frame_rate_flag;
+        self
+    }
+
+    /// Set `frame_rate_index`.
+    #[must_use]
+    pub fn with_frame_rate_index(mut self, frame_rate_index: Option<u64>) -> Self {
+        self.frame_rate_index = frame_rate_index;
+        self
+    }
+
+    /// Set `custom_pixel_aspect_ratio_flag`.
+    #[must_use]
+    pub fn with_custom_pixel_aspect_ratio_flag(
+        mut self,
+        custom_pixel_aspect_ratio_flag: bool,
+    ) -> Self {
+        self.custom_pixel_aspect_ratio_flag = custom_pixel_aspect_ratio_flag;
+        self
+    }
+
+    /// Set `pixel_aspect_ratio_index`.
+    #[must_use]
+    pub fn with_pixel_aspect_ratio_index(mut self, pixel_aspect_ratio_index: Option<u64>) -> Self {
+        self.pixel_aspect_ratio_index = pixel_aspect_ratio_index;
+        self
+    }
+
+    /// Set `custom_clean_area_flag`.
+    #[must_use]
+    pub fn with_custom_clean_area_flag(mut self, custom_clean_area_flag: bool) -> Self {
+        self.custom_clean_area_flag = custom_clean_area_flag;
+        self
+    }
+
+    /// Set `custom_signal_range_flag`.
+    #[must_use]
+    pub fn with_custom_signal_range_flag(mut self, custom_signal_range_flag: bool) -> Self {
+        self.custom_signal_range_flag = custom_signal_range_flag;
+        self
+    }
+
+    /// Set `signal_range_index`.
+    #[must_use]
+    pub fn with_signal_range_index(mut self, signal_range_index: Option<u64>) -> Self {
+        self.signal_range_index = signal_range_index;
+        self
+    }
+
+    /// Set `custom_color_spec_flag`.
+    #[must_use]
+    pub fn with_custom_color_spec_flag(mut self, custom_color_spec_flag: bool) -> Self {
+        self.custom_color_spec_flag = custom_color_spec_flag;
+        self
+    }
+
+    /// Set `color_spec_index`.
+    #[must_use]
+    pub fn with_color_spec_index(mut self, color_spec_index: Option<u64>) -> Self {
+        self.color_spec_index = color_spec_index;
+        self
+    }
 }
 
 /// `preset_signal_range(index)` — Table 10 ("Preset signal ranges",
@@ -283,11 +424,42 @@ pub fn set_source_defaults(base_video_format: u64) -> Result<VideoParameters> {
 
 /// Parsed parse-parameters block (§11.2).
 #[derive(Debug, Clone, Copy, Default)]
+#[non_exhaustive]
 pub struct ParseParameters {
     pub major_version: u64,
     pub minor_version: u64,
     pub profile: u64,
     pub level: u64,
+}
+
+impl ParseParameters {
+    /// Set `major_version`.
+    #[must_use]
+    pub fn with_major_version(mut self, major_version: u64) -> Self {
+        self.major_version = major_version;
+        self
+    }
+
+    /// Set `minor_version`.
+    #[must_use]
+    pub fn with_minor_version(mut self, minor_version: u64) -> Self {
+        self.minor_version = minor_version;
+        self
+    }
+
+    /// Set `profile`.
+    #[must_use]
+    pub fn with_profile(mut self, profile: u64) -> Self {
+        self.profile = profile;
+        self
+    }
+
+    /// Set `level`.
+    #[must_use]
+    pub fn with_level(mut self, level: u64) -> Self {
+        self.level = level;
+        self
+    }
 }
 
 /// `parse_parameters()` (§11.2.1).
@@ -589,7 +761,8 @@ fn source_parameters(
 }
 
 /// Decoder coding parameters derived by `set_coding_parameters()` (§11.6).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
+#[non_exhaustive]
 pub struct CodingParameters {
     pub luma_width: u64,
     pub luma_height: u64,
@@ -644,6 +817,7 @@ pub fn set_coding_parameters(vp: &VideoParameters, picture_coding_mode: u64) -> 
 
 /// Result of `sequence_header()` (§11.1).
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub struct SequenceHeader {
     pub parse_parameters: ParseParameters,
     pub base_video_format: u64,
@@ -653,6 +827,27 @@ pub struct SequenceHeader {
     pub source_overrides: SourceOverrides,
     pub picture_coding_mode: u64,
     pub coding_parameters: CodingParameters,
+}
+
+impl SequenceHeader {
+    /// Build `SequenceHeader` from every field, in declaration order.
+    pub fn new(
+        parse_parameters: ParseParameters,
+        base_video_format: u64,
+        video_parameters: VideoParameters,
+        source_overrides: SourceOverrides,
+        picture_coding_mode: u64,
+        coding_parameters: CodingParameters,
+    ) -> Self {
+        Self {
+            parse_parameters,
+            base_video_format,
+            video_parameters,
+            source_overrides,
+            picture_coding_mode,
+            coding_parameters,
+        }
+    }
 }
 
 /// `sequence_header()` (§11.1): parse parse-parameters, base format, source

@@ -18,7 +18,8 @@ use crate::{Error, Result};
 pub const PARSE_INFO_PREFIX: [u8; 4] = [0x42, 0x42, 0x43, 0x44];
 
 /// A parsed parse-info header (§10.5.1).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
+#[non_exhaustive]
 pub struct ParseInfo {
     pub parse_code: u8,
     pub next_parse_offset: u32,
@@ -27,6 +28,7 @@ pub struct ParseInfo {
 
 /// Classify a parse code per Table 4 / Table 5.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DataUnit {
     SequenceHeader,
     EndOfSequence,
@@ -117,7 +119,8 @@ pub fn classify(parse_code: u8) -> DataUnit {
 /// parameters follow); a non-zero count marks a data fragment carrying
 /// `fragment_slice_count` consecutive slices starting at the
 /// `(fragment_x_offset, fragment_y_offset)` slice coordinate.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
+#[non_exhaustive]
 pub struct FragmentHeader {
     pub picture_number: u32,
     /// Undefined for the purposes of the standard; does not contribute to

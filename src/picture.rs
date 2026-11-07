@@ -9,7 +9,8 @@ use crate::wavelet::Plane;
 
 /// A fully decoded picture: three planes of unsigned sample values plus the
 /// picture number from the picture header (§12.2).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct DecodedPicture {
     pub picture_number: u32,
     pub luma_width: usize,
@@ -31,11 +32,29 @@ pub struct DecodedPicture {
 
 /// Parsed picture: header + transform parameters + unpacked coefficients,
 /// ready for `picture_decode`.
+#[non_exhaustive]
 pub struct ParsedPicture {
     pub picture_number: u32,
     pub kind: PictureKind,
     pub transform_parameters: TransformParameters,
     pub transform_data: TransformData,
+}
+
+impl ParsedPicture {
+    /// Build `ParsedPicture` from every field, in declaration order.
+    pub fn new(
+        picture_number: u32,
+        kind: PictureKind,
+        transform_parameters: TransformParameters,
+        transform_data: TransformData,
+    ) -> Self {
+        Self {
+            picture_number,
+            kind,
+            transform_parameters,
+            transform_data,
+        }
+    }
 }
 
 /// `picture_parse()` (§12.1): picture header (§12.2) then the wavelet

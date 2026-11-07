@@ -94,6 +94,7 @@
 //! }
 //! ```
 
+#[doc(hidden)] // internal — exposed for tests; not part of the stable API
 pub mod bitio;
 pub mod conformance;
 pub mod encoder;
@@ -101,9 +102,12 @@ pub mod error;
 pub mod mxf;
 pub mod params;
 pub mod picture;
+#[doc(hidden)] // internal — exposed for tests; not part of the stable API
 pub mod quant;
 pub mod sequence;
+#[doc(hidden)] // internal — exposed for tests; not part of the stable API
 pub mod transform;
+#[doc(hidden)] // internal — exposed for tests; not part of the stable API
 pub mod wavelet;
 
 pub use encoder::{EncoderConfig, PictureInput, RateControl, SequenceEncoder, encode_sequence};
